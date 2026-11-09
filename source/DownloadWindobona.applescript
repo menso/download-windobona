@@ -64,6 +64,7 @@ on run
 
 	set theApp to current application's NSApplication's sharedApplication()
 	theApp's setActivationPolicy:0 -- NSApplicationActivationPolicyRegular
+	theApp's setDelegate:me
 	my buildMenuBar()
 	my setDockIcon()
 
@@ -762,6 +763,18 @@ end stopClicked:
 on windowWillClose:aNotification
 	current application's NSApplication's sharedApplication()'s terminate:me
 end windowWillClose:
+
+on applicationWillTerminate:aNotification
+	-- the download process is launched via nohup specifically so it
+	-- survives an AppleScript-side hiccup, but that also means Cmd-Q (or
+	-- any other quit path) would otherwise leave it running in the
+	-- background untouched -- clean it up explicitly here instead
+	if bashPID is not "" then
+		try
+			do shell script "kill " & bashPID & " 2>/dev/null; sleep 0.3; kill -9 " & bashPID & " 2>/dev/null; pkill -9 -f " & quoted form of my scriptPath() & " 2>/dev/null"
+		end try
+	end if
+end applicationWillTerminate:
 
 on openReleasePage:sender
 	current application's NSWorkspace's sharedWorkspace()'s openURL:(current application's NSURL's URLWithString:("https://github.com/" & GITHUB_REPO & "/releases/latest"))
