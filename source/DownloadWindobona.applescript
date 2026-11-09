@@ -400,31 +400,24 @@ on showRotationEditor()
 		set end of rotRowDeg to curDeg
 		set rowButtonSet to {}
 		repeat with c from 1 to 4
-			-- each button gets its OWN superview so AppKit's automatic
-			-- same-superview radio grouping can never apply at all -- it was
-			-- still fighting the programmatic setState: calls below even
-			-- with the row-level container, leaving every row showing "No
-			-- rotation" regardless of what was actually loaded from prefs
-			set btnHolder to current application's NSView's alloc()'s initWithFrame:(current application's NSMakeRect(labelW + (c - 1) * colW, rowTop, colW, rowH))
-			gridView's addSubview:btnHolder
-
-			set rb to current application's NSButton's alloc()'s initWithFrame:(current application's NSMakeRect(colW / 2 - 10, 4, 20, 20))
-			rb's setButtonType:4 -- NSButtonTypeRadio
-			rb's setTitle:""
-			-- tag encodes both the row and this button's own degree value, so
-			-- the click handler can update rotRowDeg directly rather than
-			-- needing to re-read .state() off every button after the alert
-			-- closes, which turned out not to reliably reflect the user's
-			-- actual selection by the time Save was read
+			-- selection is shown via the button's own title text (a filled
+			-- vs. empty circle), not NSButtonTypeRadio's .state -- that
+			-- state was confirmed (via a debug alert) to not reliably
+			-- reflect correct underlying data on a reopen, for reasons that
+			-- didn't resolve even after two different fix attempts. Title
+			-- text has no equivalent hidden state to get out of sync.
+			set rb to current application's NSButton's alloc()'s initWithFrame:(current application's NSMakeRect(labelW + (c - 1) * colW + colW / 2 - 15, rowTop + 2, 30, 24))
+			rb's setBezelStyle:1 -- NSBezelStyleRounded
+			rb's setFont:(current application's NSFont's systemFontOfSize:15)
+			if curDeg is (item c of colDegrees) then
+				rb's setTitle:"●"
+			else
+				rb's setTitle:"○"
+			end if
 			rb's setTag:(rowIdx * 1000 + (item c of colDegrees))
 			rb's setTarget:me
 			rb's setAction:"rotRadioClicked:"
-			if curDeg is (item c of colDegrees) then
-				rb's setState:1
-			else
-				rb's setState:0
-			end if
-			btnHolder's addSubview:rb
+			gridView's addSubview:rb
 			set end of rowButtonSet to rb
 		end repeat
 		set end of rotButtons to {camera:camN, buttons:rowButtonSet}
@@ -436,22 +429,6 @@ on showRotationEditor()
 	(theAlert's addButtonWithTitle:"Save")
 	(theAlert's addButtonWithTitle:"Cancel")
 	theAlert's setAccessoryView:gridView
-
-	-- re-apply each button's state now that the view is attached to a live
-	-- window: setState: calls made while building the buttons off-screen
-	-- (before this point) were confirmed correct in data but not reliably
-	-- reflected visually -- redoing them here, once attached, fixes that
-	repeat with rowIdx3 from 1 to (count of rotButtons)
-		set btns3 to buttons of (item rowIdx3 of rotButtons)
-		set targetDeg to item rowIdx3 of rotRowDeg
-		repeat with c from 1 to 4
-			if targetDeg is (item c of colDegrees) then
-				(item c of btns3)'s setState:1
-			else
-				(item c of btns3)'s setState:0
-			end if
-		end repeat
-	end repeat
 
 	set theResponse to theAlert's runModal() as integer
 	if theResponse is 1000 then
@@ -476,14 +453,16 @@ on rotRadioClicked:sender
 		set firstRow to ((item 1 of btns)'s tag() as integer) div 1000
 		if firstRow is clickedRow then
 			repeat with b in btns
-				if b is not sender then
-					b's setState:0
+				if b is sender then
+					b's setTitle:"●"
+				else
+					b's setTitle:"○"
 				end if
 			end repeat
-			sender's setState:1
 			-- the saved selection is tracked here directly, rather than by
-			-- re-reading .state() off every button once the alert closes --
-			-- that turned out not to reliably reflect the real selection
+			-- re-reading button state off every button once the alert
+			-- closes -- that turned out not to reliably reflect the real
+			-- selection
 			set item clickedRow of rotRowDeg to clickedDeg
 			exit repeat
 		end if
