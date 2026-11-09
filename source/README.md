@@ -6,9 +6,15 @@ into neatly named per-flight folders.
 
 ## Running it
 
-Double-click `DownloadWindobona.app`. It will ask for one or more order
-URLs (click "Add" to queue another, "Done" to start), then a destination
-folder. Files land in:
+Double-click `DownloadWindobona.app`. It opens a single window that walks
+through three steps (the current step is highlighted in green at the top):
+
+1. **Add URLs** — paste one or more order URLs, one per line.
+2. **Select Folder** — choose where the videos go.
+3. **Download Progress** — one progress bar per order plus an overall bar,
+   updating live.
+
+Files land in:
 
 ```
 <destination>/<HHMMSS>_<TeamName>/<date>_<HH>_<MM>_<SS>_<FF>_cam<N>.mp4
@@ -40,11 +46,22 @@ Line Tools prompt.
 - Resumable: re-running the same order skips any file already downloaded
   correctly (checked by comparing on-disk size to the server's reported
   size), so a re-run after an interruption only fetches what's missing.
+- Checks this repo's latest GitHub release on launch and shows a banner at
+  the top of the window if a newer version exists (click it to open the
+  release page). This is a simple string comparison against the version
+  baked into the app (`CURRENT_VERSION` near the top of the AppleScript
+  source), not real semantic-version ordering — fine as long as each
+  release bumps that constant.
 
 ## Files
 
-- `DownloadWindobona.applescript` — the UI shell: the URL/folder dialogs,
-  the live progress panel, and the final summary dialog.
+- `DownloadWindobona.applescript` — the whole UI: the three-step window
+  (AppleScriptObjC/Cocoa — a real window, not `display dialog` boxes), the
+  live per-order + overall progress bars, and the update check. It launches
+  `download_windobona.sh` as a background process per order and polls each
+  order's log file directly via Cocoa file APIs (no shelling out in the
+  polling loop, so there's no AppleEvent-timeout risk no matter how long a
+  batch takes).
 - `download_windobona.sh` — the actual download engine. Fully self
   contained; takes `<media_url> <destination_folder>` as arguments and
   prints `STATE ...` / `FINAL ...` / `ERROR ...` lines that the AppleScript

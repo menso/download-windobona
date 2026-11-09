@@ -6,10 +6,19 @@ paragliding footage) into neatly named per-flight folders.
 
 ## Download / run
 
-Grab `DownloadWindobona_v03.app` from this repo and double-click it. It will ask
-for one or more order URLs (e.g.
-`https://bestellung.windobona.berlin/media/<code>`) and a destination
-folder, then download everything.
+**[⬇ Download DownloadWindobona.zip](https://github.com/menso/download-windobona/releases/latest/download/DownloadWindobona.zip)**
+(always links to the newest release). Unzip it and double-click
+`DownloadWindobona.app`.
+
+Don't grab it by browsing the file list above — `.app` is actually a
+folder on disk, so clicking it in GitHub's file browser just opens that
+folder instead of downloading anything. The link above is a proper
+one-click download.
+
+The app walks you through three steps: paste one or more order URLs
+(e.g. `https://bestellung.windobona.berlin/media/<code>`), choose a
+destination folder, then watch it download — with a progress bar per
+order plus an overall one.
 
 Files land in:
 
@@ -45,10 +54,15 @@ prompt.
 
 ## Repo layout
 
-- `DownloadWindobona_v03.app` — the runnable app.
-- `DownloadWindobona_v03_source/` — plain-text source:
-  - `DownloadWindobona.applescript` — the UI shell (URL/folder dialogs,
-    live progress panel, final summary).
+This repo tracks source only — the built `.app` is distributed as a zip on
+the [Releases page](https://github.com/menso/download-windobona/releases),
+not committed here (committing a `.app` bundle to the repo tree is exactly
+what made it look like a folder to browse instead of a file to download).
+
+- `source/` — plain-text source:
+  - `DownloadWindobona.applescript` — the whole UI (AppleScriptObjC/Cocoa):
+    the three-step window, live per-order + overall progress bars, and the
+    update check.
   - `download_windobona.sh` — the download engine. Self-contained; takes
     `<media_url> <destination_folder>` as arguments and prints
     `STATE ...` / `FINAL ...` / `ERROR ...` lines that the AppleScript side
@@ -57,14 +71,28 @@ prompt.
 ## Rebuilding after an edit
 
 ```bash
-cd DownloadWindobona_v03_source
-osacompile -o ../DownloadWindobona_v03.app DownloadWindobona.applescript
-mkdir -p ../DownloadWindobona_v03.app/Contents/Resources
-cp download_windobona.sh ../DownloadWindobona_v03.app/Contents/Resources/
-chmod +x ../DownloadWindobona_v03.app/Contents/Resources/download_windobona.sh
+cd source
+osacompile -o ../DownloadWindobona.app DownloadWindobona.applescript
+mkdir -p ../DownloadWindobona.app/Contents/Resources
+cp download_windobona.sh ../DownloadWindobona.app/Contents/Resources/
+chmod +x ../DownloadWindobona.app/Contents/Resources/download_windobona.sh
 ```
 
 No Xcode project, no signing, no dependencies to install.
+
+### Cutting a release
+
+```bash
+# bump CURRENT_VERSION in source/DownloadWindobona.applescript first, then:
+cd ..  # repo root, with DownloadWindobona.app freshly built there (gitignored)
+zip -r DownloadWindobona.zip DownloadWindobona.app
+git tag vX.Y.Z && git push origin vX.Y.Z
+gh release create vX.Y.Z DownloadWindobona.zip --title vX.Y.Z --notes "..."
+```
+
+The asset must always be named `DownloadWindobona.zip` — that's what makes
+the `.../releases/latest/download/DownloadWindobona.zip` link above always
+resolve to the newest release automatically.
 
 ## Contributing
 
