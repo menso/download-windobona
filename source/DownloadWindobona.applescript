@@ -372,55 +372,41 @@ on showRotationEditor()
 		set cams to {0, 1, 2, 3, 4}
 	end if
 
-	set colLabels to {"No rotation", "90° CW", "90° CCW", "180°"}
+	-- a standard dropdown per row, instead of a grid of custom circle
+	-- buttons: two different from-scratch selection-indicator approaches
+	-- (NSButtonTypeRadio's .state, then title-text glyphs) both failed to
+	-- reliably reflect confirmed-correct underlying data. NSPopUpButton is
+	-- the standard, heavily-used AppKit control for exactly this, and its
+	-- own indexOfSelectedItem is authoritative -- no parallel tracking
+	-- needed at all.
 	set colDegrees to {0, 90, 270, 180}
-	set colW to 110
-	set labelW to 90
-	set rowH to 30
-	set gridW to labelW + (colW * 4)
-	set gridH to rowH * ((count of cams) + 1)
+	set labelW to 110
+	set popupW to 220
+	set rowH to 32
+	set gridW to labelW + popupW
+	set gridH to rowH * (count of cams)
 
 	set gridView to current application's NSView's alloc()'s initWithFrame:(current application's NSMakeRect(0, 0, gridW, gridH))
 
-	repeat with c from 1 to 4
-		set hdr to my makeLabel(item c of colLabels, labelW + ((c - 1) * colW), gridH - rowH, colW, 20, true)
-		gridView's addSubview:hdr
-	end repeat
-
 	set rotButtons to {}
-	set rotRowDeg to {}
 	set rowIdx to 0
 	repeat with camN in cams
 		set rowIdx to rowIdx + 1
-		set rowTop to gridH - rowH - (rowIdx * rowH)
-		set camLabel to my makeLabel("Camera " & camN, 0, rowTop + 4, labelW, 20, false)
+		set rowTop to gridH - (rowIdx * rowH)
+		set camLabel to my makeLabel("Camera " & camN, 0, rowTop + 6, labelW, 20, false)
 		gridView's addSubview:camLabel
 
 		set curDeg to my degreesForCam(camN)
-		set end of rotRowDeg to curDeg
-		set rowButtonSet to {}
+		set selIdx to 0
 		repeat with c from 1 to 4
-			-- selection is shown via the button's own title text (a filled
-			-- vs. empty circle), not NSButtonTypeRadio's .state -- that
-			-- state was confirmed (via a debug alert) to not reliably
-			-- reflect correct underlying data on a reopen, for reasons that
-			-- didn't resolve even after two different fix attempts. Title
-			-- text has no equivalent hidden state to get out of sync.
-			set rb to current application's NSButton's alloc()'s initWithFrame:(current application's NSMakeRect(labelW + (c - 1) * colW + colW / 2 - 15, rowTop + 2, 30, 24))
-			rb's setBezelStyle:1 -- NSBezelStyleRounded
-			rb's setFont:(current application's NSFont's systemFontOfSize:15)
-			if curDeg is (item c of colDegrees) then
-				rb's setTitle:"●"
-			else
-				rb's setTitle:"○"
-			end if
-			rb's setTag:(rowIdx * 1000 + (item c of colDegrees))
-			rb's setTarget:me
-			rb's setAction:"rotRadioClicked:"
-			gridView's addSubview:rb
-			set end of rowButtonSet to rb
+			if curDeg is (item c of colDegrees) then set selIdx to c - 1
 		end repeat
-		set end of rotButtons to {camera:camN, buttons:rowButtonSet}
+
+		set thePopup to current application's NSPopUpButton's alloc()'s initWithFrame:(current application's NSMakeRect(labelW, rowTop + 2, popupW, 26)) pullsDown:false
+		thePopup's addItemsWithTitles:{"No rotation", "90° clockwise", "90° counter-clockwise", "180°"}
+		thePopup's selectItemAtIndex:selIdx
+		gridView's addSubview:thePopup
+		set end of rotButtons to {camera:camN, popup:thePopup}
 	end repeat
 
 	set theAlert to current application's NSAlert's alloc()'s init()
@@ -434,40 +420,16 @@ on showRotationEditor()
 	if theResponse is 1000 then
 		set rotationCams to {}
 		set rotationDegrees to {}
-		repeat with rowIdx2 from 1 to (count of rotButtons)
-			set camN to camera of (item rowIdx2 of rotButtons)
+		repeat with rowRec in rotButtons
+			set camN to camera of rowRec
+			set thePopup to popup of rowRec
+			set selIdx to (thePopup's indexOfSelectedItem()) as integer
 			set end of rotationCams to camN
-			set end of rotationDegrees to (item rowIdx2 of rotRowDeg)
+			set end of rotationDegrees to (item (selIdx + 1) of colDegrees)
 		end repeat
 		my saveRotationPrefs()
 	end if
 end showRotationEditor
-
-on rotRadioClicked:sender
-	-- tag = rowIndex*1000 + thisButton'sDegree, decoded back into both
-	set fullTag to sender's tag() as integer
-	set clickedRow to fullTag div 1000
-	set clickedDeg to fullTag mod 1000
-	repeat with rowRec in rotButtons
-		set btns to buttons of rowRec
-		set firstRow to ((item 1 of btns)'s tag() as integer) div 1000
-		if firstRow is clickedRow then
-			repeat with b in btns
-				if b is sender then
-					b's setTitle:"●"
-				else
-					b's setTitle:"○"
-				end if
-			end repeat
-			-- the saved selection is tracked here directly, rather than by
-			-- re-reading button state off every button once the alert
-			-- closes -- that turned out not to reliably reflect the real
-			-- selection
-			set item clickedRow of rotRowDeg to clickedDeg
-			exit repeat
-		end if
-	end repeat
-end rotRadioClicked:
 
 on askRotationChoice()
 	set theAlert to current application's NSAlert's alloc()'s init()
