@@ -31,7 +31,8 @@ trap cleanup EXIT
 # curl/subshell/reporter child along with it instead of leaving them orphaned
 trap 'kill 0 2>/dev/null; exit 1' TERM INT
 
-mkdir -p "$DEST" "$WORKDIR/status" "$WORKDIR/pct"
+mkdir -p "$DEST" "$WORKDIR/status" "$WORKDIR/pct" "$WORKDIR/pctname"
+echo "WORKDIR $WORKDIR"
 
 # ---------------------------------------------------------------- helpers --
 
@@ -169,6 +170,10 @@ process_item() {
     mkdir -p "$DEST/$folder"
     outpath="$DEST/$folder/$outname"
     echo 0 > "$WORKDIR/pct/$key"
+    # the full path is kept (not removed on completion, unlike pct/) so the
+    # UI can look up "what file is this" for a finished item too, to rotate
+    # it immediately rather than waiting for the whole batch
+    echo "$outpath" > "$WORKDIR/pctname/$key"
 
     head_info=$(curl -sI -L --max-time 20 "$url" 2>/dev/null)
     status_line=$(printf '%s\n' "$head_info" | grep -E '^HTTP/' | tail -1)

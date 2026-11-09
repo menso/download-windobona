@@ -5,7 +5,7 @@ use framework "AVFoundation"
 
 property parent : class "NSObject"
 
-property CURRENT_VERSION : "1.0.0"
+property CURRENT_VERSION : "1.1.0"
 property WINDOBONA_BASE : "https://bestellung.windobona.berlin/media/"
 property GITHUB_REPO : "menso/download-windobona"
 
@@ -42,6 +42,9 @@ property orderFinished : {}
 property destPath : ""
 property pollTimer : missing value
 property bashPID : ""
+property shellWorkDir : ""
+property rotatedKeys : {}
+property totalRotatedCount : 0
 property stopButton : missing value
 
 property rotationCams : {}
@@ -481,6 +484,9 @@ on step2Start:sender
 		set orderTotals to {}
 		set orderDone to {}
 		set orderSucceeded to {}
+		set shellWorkDir to ""
+		set rotatedKeys to {}
+		set totalRotatedCount to 0
 		set orderFinished to {}
 
 		set cp to "container frame"
@@ -542,6 +548,12 @@ on pollProgress:sender
 	set n to count of queuedURLs
 	set logText to my readFile(logPath)
 	set allDone to true
+
+	if shellWorkDir is "" and logText is not "" then
+		set wdLine to my lastLineStartingWith(logText, "WORKDIR ")
+		if wdLine is not "" then set shellWorkDir to (text 9 thru -1 of wdLine)
+	end if
+	if shellWorkDir is not "" then my rotateNewlyFinishedFiles()
 
 	repeat with i from 1 to n
 		if (item i of orderFinished) is false then
@@ -611,10 +623,11 @@ on pollProgress:sender
 
 	if allDone then
 		pollTimer's invalidate()
-		overallLabel's setStringValue:"Applying rotation settings…"
-		set rotatedCount to my applyRotations(destPath)
+		-- catch any file that finished in the same tick allDone went true
+		-- (and so wasn't picked up by a later poll cycle)
+		if shellWorkDir is not "" then my rotateNewlyFinishedFiles()
 		set rotSuffix to ""
-		if rotatedCount > 0 then set rotSuffix to return & "Rotated " & rotatedCount & " video(s) per your settings."
+		if totalRotatedCount > 0 then set rotSuffix to return & "Rotated " & totalRotatedCount & " video(s) per your settings."
 		summaryLabel's setStringValue:("Downloaded " & succeededAll & " of " & totalAll & " videos." & rotSuffix & return & "Saved to: " & destPath)
 		summaryLabel's setHidden:false
 		stopButton's setHidden:true
@@ -622,26 +635,59 @@ on pollProgress:sender
 	end if
 end pollProgress:
 
-on applyRotations(rootPath)
-	set rotatedCount to 0
-	repeat with idx from 1 to (count of rotationCams)
-		set camN to item idx of rotationCams
-		set deg to item idx of rotationDegrees
-		if deg is not 0 then
-			try
-				set findCmd to "find " & quoted form of rootPath & " -type f -name " & quoted form of ("*_cam" & camN & ".mp4")
-				set fileList to do shell script findCmd
-				repeat with fPath in (paragraphs of fileList)
-					set fPath to fPath as text
+on rotateNewlyFinishedFiles()
+	-- rotates each file as soon as it finishes downloading (rather than
+	-- waiting for the whole batch), so files that complete early are
+	-- already correct if you open them before everything else is done
+	try
+		set statusDir to shellWorkDir & "/status"
+		set fm to current application's NSFileManager's defaultManager()
+		set keysList to fm's contentsOfDirectoryAtPath:statusDir |error|:(missing value)
+		if keysList is missing value then return
+
+		repeat with keyObj in keysList
+			set keyStr to keyObj as text
+			if keyStr is not in rotatedKeys then
+				set end of rotatedKeys to keyStr
+				set outcome to my trimText(my readFile(statusDir & "/" & keyStr))
+				if outcome is "success" then
+					set fPath to my trimText(my readFile(shellWorkDir & "/pctname/" & keyStr))
 					if fPath is not "" then
-						if my rotateFile(fPath, deg) then set rotatedCount to rotatedCount + 1
+						set camN to my cameraNumberFromPath(fPath)
+						if camN is not -1 then
+							set deg to my degreesForCam(camN)
+							if deg is not 0 then
+								if my rotateFile(fPath, deg) then set totalRotatedCount to totalRotatedCount + 1
+							end if
+						end if
 					end if
-				end repeat
-			end try
-		end if
-	end repeat
-	return rotatedCount
-end applyRotations
+				end if
+			end if
+		end repeat
+	end try
+end rotateNewlyFinishedFiles
+
+on cameraNumberFromPath(p)
+	set p to p as text
+	if p contains "_cam" then
+		set AppleScript's text item delimiters to "_cam"
+		set parts to text items of p
+		set AppleScript's text item delimiters to ""
+		set afterCam to item -1 of parts
+		set digitsText to ""
+		repeat with ch in afterCam
+			if ch is in "0123456789" then
+				set digitsText to digitsText & ch
+			else
+				exit repeat
+			end if
+		end repeat
+		try
+			return digitsText as integer
+		end try
+	end if
+	return -1
+end cameraNumberFromPath
 
 on closeClicked:sender
 	current application's NSApplication's sharedApplication()'s terminate:me
