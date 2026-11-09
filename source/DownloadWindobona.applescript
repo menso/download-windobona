@@ -136,6 +136,16 @@ on buildWindow()
 	win's setTitle:("DownloadWindobona " & CURRENT_VERSION)
 	win's setReleasedWhenClosed:false
 	win's setDelegate:me
+	try
+		set iconPath2 to current application's NSBundle's mainBundle()'s pathForResource:"applet" ofType:"icns"
+		if iconPath2 is not missing value then
+			set miniImage to current application's NSImage's alloc()'s initWithContentsOfFile:iconPath2
+			-- NSWindow.miniwindowImage is what the Dock actually uses for a
+			-- minimized window's tile; the app-wide icon (set elsewhere)
+			-- does not automatically cover this specific case
+			if miniImage is not missing value then win's setMiniwindowImage:miniImage
+		end if
+	end try
 
 	set contentView to win's contentView()
 
@@ -383,19 +393,20 @@ on showRotationEditor()
 		set camLabel to my makeLabel("Camera " & camN, 0, rowTop + 4, labelW, 20, false)
 		gridView's addSubview:camLabel
 
-		set rowContainer to current application's NSView's alloc()'s initWithFrame:(current application's NSMakeRect(labelW, rowTop, colW * 4, rowH))
-		gridView's addSubview:rowContainer
-
 		set curDeg to my degreesForCam(camN)
 		set rowButtonSet to {}
 		repeat with c from 1 to 4
-			set rb to current application's NSButton's alloc()'s initWithFrame:(current application's NSMakeRect((c - 1) * colW + colW / 2 - 10, 4, 20, 20))
+			-- each button gets its OWN superview so AppKit's automatic
+			-- same-superview radio grouping can never apply at all -- it was
+			-- still fighting the programmatic setState: calls below even
+			-- with the row-level container, leaving every row showing "No
+			-- rotation" regardless of what was actually loaded from prefs
+			set btnHolder to current application's NSView's alloc()'s initWithFrame:(current application's NSMakeRect(labelW + (c - 1) * colW, rowTop, colW, rowH))
+			gridView's addSubview:btnHolder
+
+			set rb to current application's NSButton's alloc()'s initWithFrame:(current application's NSMakeRect(colW / 2 - 10, 4, 20, 20))
 			rb's setButtonType:4 -- NSButtonTypeRadio
 			rb's setTitle:""
-			-- mutual exclusion is handled explicitly in rotRadioClicked: below
-			-- rather than relying on AppKit's automatic same-superview
-			-- grouping, which did not reliably exclude across this row/column
-			-- layout when button states were set programmatically
 			rb's setTag:rowIdx
 			rb's setTarget:me
 			rb's setAction:"rotRadioClicked:"
@@ -404,7 +415,7 @@ on showRotationEditor()
 			else
 				rb's setState:0
 			end if
-			rowContainer's addSubview:rb
+			btnHolder's addSubview:rb
 			set end of rowButtonSet to rb
 		end repeat
 		set end of rotButtons to {camera:camN, buttons:rowButtonSet}
@@ -863,13 +874,13 @@ end degreesForCam
 on detectCamerasAcrossURLs(urlList)
 	-- a quick, synchronous fetch+parse (no downloads) just to find which
 	-- camera numbers this set of orders actually uses, for the rotation
-	-- customize table
-	set shellLines to {}
-	repeat with u in urlList
-		set end of shellLines to ("curl -sS -X POST -H 'Content-Type: application/json' --max-time 15 " & quoted form of (u as text) & " 2>/dev/null")
-	end repeat
-	-- build the API url per order the same way the download engine does
-	set camSet to {}
+	-- customize table. A non-empty videoPath field isn't enough on its own
+	-- -- a camera can have a real-looking URL that still 404s on the actual
+	-- video server, so each candidate gets a real HEAD check, same as the
+	-- download engine itself uses to decide what's skippable.
+	set candidateCams to {}
+	set candidateURLs to {}
+
 	repeat with u in urlList
 		set uText to u as text
 		set secText to do shell script "printf '%s' " & quoted form of uText & " | sed -E 's#/+$##' | sed -E 's#.*/##'"
@@ -877,22 +888,53 @@ on detectCamerasAcrossURLs(urlList)
 		set apiURL to hostText & "/api/media?sec=" & secText
 		try
 			set jsonText to do shell script "curl -sS -X POST -H 'Content-Type: application/json' --max-time 15 " & quoted form of apiURL
-			-- only count a camera if it has a genuinely non-empty videoPath
-			-- AND videoPreview on at least one entry -- a bare "_camN_" can
-			-- also show up in an empty/placeholder field for a camera with
-			-- no real clip, which should not appear in this table at all
-			set camsText to do shell script "printf '%s' " & quoted form of jsonText & " | grep -oE '\\{[^{}]*\\}' | grep -E '\"videoPath\"[[:space:]]*:[[:space:]]*\"[^\"]+\"' | grep -E '\"videoPreview\"[[:space:]]*:[[:space:]]*\"[^\"]+\"' | grep -oE '_cam[0-9]+_' | sed -E 's/_cam([0-9]+)_/\\1/' | sort -nu"
-			repeat with camLine in (paragraphs of camsText)
-				set camLine to camLine as text
-				if camLine is not "" then
-					set camN to camLine as integer
-					if camN is not in camSet then set end of camSet to camN
+			set pathsText to do shell script "printf '%s' " & quoted form of jsonText & " | grep -oE '\\{[^{}]*\\}' | grep -E '\"videoPath\"[[:space:]]*:[[:space:]]*\"[^\"]+\"' | grep -E '\"videoPreview\"[[:space:]]*:[[:space:]]*\"[^\"]+\"' | grep -oE '\"videoPath\"[[:space:]]*:[[:space:]]*\"[^\"]+\"' | sed -E 's/\"videoPath\"[[:space:]]*:[[:space:]]*\"(.*)\"/\\1/'"
+			repeat with pLine in (paragraphs of pathsText)
+				set pLine to pLine as text
+				if pLine is not "" then
+					set camN to my cameraNumberFromPath(pLine)
+					if camN is not -1 and camN is not in candidateCams then
+						set end of candidateCams to camN
+						set end of candidateURLs to pLine
+					end if
 				end if
 			end repeat
 		end try
 	end repeat
+
+	set camSet to {}
+	repeat with idx from 1 to (count of candidateCams)
+		set camN to item idx of candidateCams
+		set testURL to item idx of candidateURLs
+		try
+			set statusLine to do shell script "curl -sI -L --max-time 15 " & quoted form of testURL & " | grep -E '^HTTP/' | tail -1"
+			if statusLine does not contain " 404" then
+				set end of camSet to camN
+			end if
+		on error
+			-- couldn't check it -- err on the side of showing it rather
+			-- than silently hiding a camera that might be real
+			set end of camSet to camN
+		end try
+	end repeat
+
+	set camSet to my sortIntegerList(camSet)
 	return camSet
 end detectCamerasAcrossURLs
+
+on sortIntegerList(lst)
+	set n to count of lst
+	repeat with i from 1 to n - 1
+		repeat with j from 1 to n - i
+			if (item j of lst) > (item (j + 1) of lst) then
+				set tmp to item j of lst
+				set item j of lst to item (j + 1) of lst
+				set item (j + 1) of lst to tmp
+			end if
+		end repeat
+	end repeat
+	return lst
+end sortIntegerList
 
 on scriptPath()
 	set bundlePath to (current application's NSBundle's mainBundle()'s bundlePath()) as text
