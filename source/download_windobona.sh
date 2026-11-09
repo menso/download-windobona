@@ -2,25 +2,36 @@
 # Pure-macOS downloader for Windobona media pages: bash + curl + grep/sed only.
 # No python, no third-party tools -- nothing here needs an install beyond
 # what ships on every Mac out of the box.
+#
+# Usage: download_windobona.sh <destination_folder> <media_url> [<media_url> ...]
+#
+# One shared pool of CONCURRENCY downloads across *all* queued orders --
+# testing showed Windobona throttles total concurrent connections from one
+# machine, not per order, so running N orders at 6 each just queued behind
+# each other instead of adding real throughput.
 set -u
 
 CONCURRENCY=6
 MAX_RETRIES=3
 RETRY_DELAY=1.5
 
-MEDIA_URL="${1:-}"
-DEST="${2:-}"
+DEST="${1:-}"
+shift || true
+URLS=("$@")
 
-if [ -z "$MEDIA_URL" ] || [ -z "$DEST" ]; then
-    echo "ERROR Usage: download_windobona.sh <media_url> <destination_folder>"
+if [ -z "$DEST" ] || [ "${#URLS[@]}" -eq 0 ]; then
+    echo "ERROR Usage: download_windobona.sh <destination_folder> <media_url> [<media_url> ...]"
     exit 1
 fi
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/windobona.XXXXXX")
 cleanup() { rm -rf "$WORKDIR"; }
 trap cleanup EXIT
+# a Stop click sends SIGTERM to this script's PID -- kill 0 takes down every
+# curl/subshell/reporter child along with it instead of leaving them orphaned
+trap 'kill 0 2>/dev/null; exit 1' TERM INT
 
-mkdir -p "$DEST"
+mkdir -p "$DEST" "$WORKDIR/status" "$WORKDIR/pct"
 
 # ---------------------------------------------------------------- helpers --
 
@@ -48,6 +59,13 @@ flight_timestamp_of() {
     printf '%s%s%s' "$hh" "$mm" "$ss"
 }
 
+flight_date_of() {
+    local fname parts
+    fname=$(basename "$1")
+    IFS='_' read -r -a parts <<< "$fname"
+    printf '%s' "${parts[0]:-unknown-date}"
+}
+
 truncated_filename_of() {
     local fname ext base_no_ext truncated
     fname=$(basename "$1")
@@ -61,78 +79,102 @@ team_name_of() {
     printf '%s' "$1" | tr -d ' '
 }
 
-# -------------------------------------------------------- fetch & parse ----
+# --------------------------------------------------- fetch & parse orders --
+# Each order gets its own folder-naming pass (unchanged per-flight grouping
+# logic), then its rows are tagged with the order number and appended to one
+# combined plan.tsv that the single shared worker pool below reads from.
 
-SEC=$(printf '%s' "$MEDIA_URL" | sed -E 's#/+$##' | sed -E 's#.*/##')
-SCHEME_HOST=$(printf '%s' "$MEDIA_URL" | sed -E 's#^(https?://[^/]+).*#\1#')
-API_URL="${SCHEME_HOST}/api/media?sec=${SEC}"
+GLOBAL_PLAN="$WORKDIR/plan.tsv"
+: > "$GLOBAL_PLAN"
 
-RAW_JSON="$WORKDIR/raw.json"
-if ! curl -sS -X POST -H "Content-Type: application/json" --max-time 30 -o "$RAW_JSON" "$API_URL"; then
-    echo "ERROR Could not load media list"
-    exit 1
-fi
-if [ ! -s "$RAW_JSON" ]; then
-    echo "ERROR Could not load media list: empty response"
-    exit 1
-fi
+declare -a ORDER_TOTAL
+declare -a ORDER_PRE_SKIPPED
 
-grep -oE '\{[^{}]*\}' "$RAW_JSON" > "$WORKDIR/objects.txt"
+order_idx=0
+for media_url in "${URLS[@]}"; do
+    order_idx=$((order_idx + 1))
+    ORDER_TOTAL[$order_idx]=0
+    ORDER_PRE_SKIPPED[$order_idx]=0
 
-PRE_SKIPPED=0
-: > "$WORKDIR/raw_plan.tsv"
-while IFS= read -r obj; do
-    path=$(get_field "$obj" "videoPath")
-    preview=$(get_field "$obj" "videoPreview")
-    if [ -z "$path" ] || [ -z "$preview" ]; then
-        PRE_SKIPPED=$((PRE_SKIPPED + 1))
+    SEC=$(printf '%s' "$media_url" | sed -E 's#/+$##' | sed -E 's#.*/##')
+    SCHEME_HOST=$(printf '%s' "$media_url" | sed -E 's#^(https?://[^/]+).*#\1#')
+    API_URL="${SCHEME_HOST}/api/media?sec=${SEC}"
+
+    RAW_JSON="$WORKDIR/raw_${order_idx}.json"
+    if ! curl -sS -X POST -H "Content-Type: application/json" --max-time 30 -o "$RAW_JSON" "$API_URL"; then
+        echo "ERROR order=$order_idx Could not load media list"
         continue
     fi
-    id=$(get_id_field "$obj")
-    name=$(get_field "$obj" "name")
-    camnum=$(cam_number_of "$path")
-    printf '%s\t%s\t%s\t%s\n' "$id" "$camnum" "$name" "$path" >> "$WORKDIR/raw_plan.tsv"
-done < "$WORKDIR/objects.txt"
-
-sort -t "$(printf '\t')" -k1,1n -k2,2n "$WORKDIR/raw_plan.tsv" > "$WORKDIR/sorted_plan.tsv"
-
-: > "$WORKDIR/plan.tsv"
-prev_id=""
-folder_name=""
-while IFS=$'\t' read -r id camnum name path; do
-    if [ "$id" != "$prev_id" ]; then
-        ts=$(flight_timestamp_of "$path")
-        team=$(team_name_of "$name")
-        folder_name="${ts}_${team}"
-        prev_id="$id"
+    if [ ! -s "$RAW_JSON" ]; then
+        echo "ERROR order=$order_idx Could not load media list: empty response"
+        continue
     fi
-    outname=$(truncated_filename_of "$path")
-    printf '%s\t%s\t%s\n' "$folder_name" "$outname" "$path" >> "$WORKDIR/plan.tsv"
-done < "$WORKDIR/sorted_plan.tsv"
 
-TOTAL=$(wc -l < "$WORKDIR/plan.tsv" | tr -d ' ')
-if [ "$TOTAL" -eq 0 ]; then
-    echo "ERROR No downloadable videos were found at that URL."
-    exit 1
+    grep -oE '\{[^{}]*\}' "$RAW_JSON" > "$WORKDIR/objects_${order_idx}.txt"
+
+    pre_skipped=0
+    raw_plan="$WORKDIR/raw_plan_${order_idx}.tsv"
+    : > "$raw_plan"
+    while IFS= read -r obj; do
+        path=$(get_field "$obj" "videoPath")
+        preview=$(get_field "$obj" "videoPreview")
+        if [ -z "$path" ] || [ -z "$preview" ]; then
+            pre_skipped=$((pre_skipped + 1))
+            continue
+        fi
+        id=$(get_id_field "$obj")
+        name=$(get_field "$obj" "name")
+        camnum=$(cam_number_of "$path")
+        printf '%s\t%s\t%s\t%s\n' "$id" "$camnum" "$name" "$path" >> "$raw_plan"
+    done < "$WORKDIR/objects_${order_idx}.txt"
+    ORDER_PRE_SKIPPED[$order_idx]=$pre_skipped
+
+    sorted_plan="$WORKDIR/sorted_plan_${order_idx}.tsv"
+    sort -t "$(printf '\t')" -k1,1n -k2,2n "$raw_plan" > "$sorted_plan"
+
+    this_total=0
+    prev_id=""
+    folder_name=""
+    while IFS=$'\t' read -r id camnum name path; do
+        if [ "$id" != "$prev_id" ]; then
+            ts=$(flight_timestamp_of "$path")
+            dt=$(flight_date_of "$path")
+            team=$(team_name_of "$name")
+            folder_name="${dt}/${ts}_${team}"
+            prev_id="$id"
+        fi
+        outname=$(truncated_filename_of "$path")
+        printf '%s\t%s\t%s\t%s\n' "$order_idx" "$folder_name" "$outname" "$path" >> "$GLOBAL_PLAN"
+        this_total=$((this_total + 1))
+    done < "$sorted_plan"
+    ORDER_TOTAL[$order_idx]=$this_total
+
+    if [ "$this_total" -eq 0 ]; then
+        echo "ERROR order=$order_idx No downloadable videos were found at that URL."
+    fi
+done
+
+GRAND_TOTAL=$(wc -l < "$GLOBAL_PLAN" | tr -d ' ')
+if [ "$GRAND_TOTAL" -eq 0 ]; then
+    exit 0
 fi
-
-mkdir -p "$WORKDIR/status" "$WORKDIR/pct"
 
 # -------------------------------------------------------------- workers ----
 
 process_item() {
-    local idx="$1" folder="$2" outname="$3" url="$4"
-    local outpath head_info status_line expected actual attempt outcome curl_pid cur pct http_code
+    local global_idx="$1" order="$2" folder="$3" outname="$4" url="$5"
+    local key outpath head_info status_line expected actual attempt outcome curl_pid cur pct http_code
 
+    key="${order}-${global_idx}"
     mkdir -p "$DEST/$folder"
     outpath="$DEST/$folder/$outname"
-    echo 0 > "$WORKDIR/pct/$idx"
+    echo 0 > "$WORKDIR/pct/$key"
 
     head_info=$(curl -sI -L --max-time 20 "$url" 2>/dev/null)
     status_line=$(printf '%s\n' "$head_info" | grep -E '^HTTP/' | tail -1)
     if printf '%s' "$status_line" | grep -qE '^HTTP/[0-9.]+ 404'; then
-        echo "skipped" > "$WORKDIR/status/$idx"
-        rm -f "$WORKDIR/pct/$idx"
+        echo "skipped" > "$WORKDIR/status/$key"
+        rm -f "$WORKDIR/pct/$key"
         return
     fi
     expected=$(printf '%s\n' "$head_info" | tr -d '\r' | grep -i '^content-length:' | tail -1 | awk '{print $2}')
@@ -142,8 +184,8 @@ process_item() {
         actual=$(stat -f%z "$outpath" 2>/dev/null || echo 0)
         if [ "$actual" = "$expected" ]; then
             # already downloaded correctly in an earlier run
-            echo "success" > "$WORKDIR/status/$idx"
-            rm -f "$WORKDIR/pct/$idx"
+            echo "success" > "$WORKDIR/status/$key"
+            rm -f "$WORKDIR/pct/$key"
             return
         fi
     fi
@@ -153,7 +195,7 @@ process_item() {
     outcome="failed"
     while [ "$attempt" -le "$MAX_RETRIES" ]; do
         rm -f "$outpath"
-        curl -sS -L --max-time 300 -o "$outpath" -w "%{http_code}" "$url" > "$WORKDIR/http_$idx.txt" 2>/dev/null &
+        curl -sS -L --max-time 300 -o "$outpath" -w "%{http_code}" "$url" > "$WORKDIR/http_$key.txt" 2>/dev/null &
         curl_pid=$!
 
         while kill -0 "$curl_pid" 2>/dev/null; do
@@ -161,13 +203,13 @@ process_item() {
                 cur=$(stat -f%z "$outpath" 2>/dev/null || echo 0)
                 pct=$(( cur * 100 / expected ))
                 [ "$pct" -gt 100 ] && pct=100
-                echo "$pct" > "$WORKDIR/pct/$idx"
+                echo "$pct" > "$WORKDIR/pct/$key"
             fi
             sleep 0.3
         done
         wait "$curl_pid"
-        http_code=$(cat "$WORKDIR/http_$idx.txt" 2>/dev/null)
-        rm -f "$WORKDIR/http_$idx.txt"
+        http_code=$(cat "$WORKDIR/http_$key.txt" 2>/dev/null)
+        rm -f "$WORKDIR/http_$key.txt"
 
         if [ "$http_code" = "404" ]; then
             outcome="skipped"
@@ -175,7 +217,7 @@ process_item() {
             break
         elif [[ "$http_code" =~ ^2 ]]; then
             outcome="success"
-            echo 100 > "$WORKDIR/pct/$idx"
+            echo 100 > "$WORKDIR/pct/$key"
             break
         else
             rm -f "$outpath"
@@ -184,31 +226,41 @@ process_item() {
         fi
     done
 
-    echo "$outcome" > "$WORKDIR/status/$idx"
-    rm -f "$WORKDIR/pct/$idx"
+    echo "$outcome" > "$WORKDIR/status/$key"
+    rm -f "$WORKDIR/pct/$key"
 }
 
 report_progress() {
-    local done_count active_count pct_sum avgpct f v
+    local order total done_count active_count pct_sum avgpct f v grand_done
+
     while true; do
-        done_count=0
-        for f in "$WORKDIR"/status/*; do
-            [ -e "$f" ] || continue
-            done_count=$((done_count + 1))
+        grand_done=0
+        for order in "${!ORDER_TOTAL[@]}"; do
+            total="${ORDER_TOTAL[$order]}"
+
+            done_count=0
+            for f in "$WORKDIR"/status/"${order}-"*; do
+                [ -e "$f" ] || continue
+                done_count=$((done_count + 1))
+            done
+
+            active_count=0
+            pct_sum=0
+            for f in "$WORKDIR"/pct/"${order}-"*; do
+                [ -e "$f" ] || continue
+                active_count=$((active_count + 1))
+                v=$(cat "$f" 2>/dev/null)
+                [ -z "$v" ] && v=0
+                pct_sum=$((pct_sum + v))
+            done
+            avgpct=0
+            [ "$active_count" -gt 0 ] && avgpct=$((pct_sum / active_count))
+
+            echo "STATE order=$order total=$total done=$done_count active=$active_count avgpct=$avgpct"
+            grand_done=$((grand_done + done_count))
         done
-        active_count=0
-        pct_sum=0
-        for f in "$WORKDIR"/pct/*; do
-            [ -e "$f" ] || continue
-            active_count=$((active_count + 1))
-            v=$(cat "$f" 2>/dev/null)
-            [ -z "$v" ] && v=0
-            pct_sum=$((pct_sum + v))
-        done
-        avgpct=0
-        [ "$active_count" -gt 0 ] && avgpct=$((pct_sum / active_count))
-        echo "STATE total=$TOTAL done=$done_count active=$active_count avgpct=$avgpct"
-        [ "$done_count" -ge "$TOTAL" ] && break
+
+        [ "$grand_done" -ge "$GRAND_TOTAL" ] && break
         sleep 0.4
     done
 }
@@ -222,17 +274,17 @@ exec 3<>"$PIPE"
 rm -f "$PIPE"
 for ((i = 0; i < CONCURRENCY; i++)); do echo >&3; done
 
-idx=0
+global_idx=0
 job_pids=()
-while IFS=$'\t' read -r folder outname url; do
-    idx=$((idx + 1))
+while IFS=$'\t' read -r order folder outname url; do
+    global_idx=$((global_idx + 1))
     read -u 3
     (
-        process_item "$idx" "$folder" "$outname" "$url"
+        process_item "$global_idx" "$order" "$folder" "$outname" "$url"
         echo >&3
     ) &
     job_pids+=($!)
-done < "$WORKDIR/plan.tsv"
+done < "$GLOBAL_PLAN"
 
 # wait only for the download jobs here -- a blanket "wait" would also reap
 # the still-running progress reporter (it is a background job of this same
@@ -246,29 +298,34 @@ wait "$REPORTER_PID" 2>/dev/null
 
 # -------------------------------------------------------------- summary ----
 
-succeeded=0
-no_file_skipped=0
-failed_names=()
-for f in "$WORKDIR"/status/*; do
-    [ -e "$f" ] || continue
-    idx=$(basename "$f")
-    v=$(cat "$f")
-    case "$v" in
-        success) succeeded=$((succeeded + 1)) ;;
-        skipped) no_file_skipped=$((no_file_skipped + 1)) ;;
-        *)
-            name=$(sed -n "${idx}p" "$WORKDIR/plan.tsv" | awk -F'\t' '{print $2}')
-            failed_names+=("$name")
-            ;;
-    esac
+for order in "${!ORDER_TOTAL[@]}"; do
+    total="${ORDER_TOTAL[$order]}"
+    succeeded=0
+    no_file_skipped=0
+    failed_names=()
+
+    for f in "$WORKDIR"/status/"${order}-"*; do
+        [ -e "$f" ] || continue
+        key=$(basename "$f")
+        v=$(cat "$f")
+        case "$v" in
+            success) succeeded=$((succeeded + 1)) ;;
+            skipped) no_file_skipped=$((no_file_skipped + 1)) ;;
+            *)
+                global_idx="${key#*-}"
+                name=$(sed -n "${global_idx}p" "$GLOBAL_PLAN" | awk -F'\t' '{print $3}')
+                failed_names+=("$name")
+                ;;
+        esac
+    done
+
+    real_total=$((total - no_file_skipped))
+    total_skipped=$((ORDER_PRE_SKIPPED[$order] + no_file_skipped))
+    if [ "${#failed_names[@]}" -eq 0 ]; then
+        failed_field="none"
+    else
+        failed_field=$(IFS=,; echo "${failed_names[*]}")
+    fi
+
+    echo "FINAL order=$order done=$succeeded total=$real_total skipped=$total_skipped failed=$failed_field dest=$DEST"
 done
-
-real_total=$((TOTAL - no_file_skipped))
-total_skipped=$((PRE_SKIPPED + no_file_skipped))
-if [ "${#failed_names[@]}" -eq 0 ]; then
-    failed_field="none"
-else
-    failed_field=$(IFS=,; echo "${failed_names[*]}")
-fi
-
-echo "FINAL done=$succeeded total=$real_total skipped=$total_skipped failed=$failed_field dest=$DEST"

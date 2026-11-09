@@ -5,6 +5,7 @@ use framework "Cocoa"
 property parent : class "NSObject"
 
 property CURRENT_VERSION : "1.0.0"
+property WINDOBONA_BASE : "https://bestellung.windobona.berlin/media/"
 property GITHUB_REPO : "menso/download-windobona"
 
 property win : missing value
@@ -29,7 +30,7 @@ property summaryLabel : missing value
 property closeButton : missing value
 
 property queuedURLs : {}
-property logPaths : {}
+property logPath : ""
 property orderBars : {}
 property orderStatusLabels : {}
 property orderTotals : {}
@@ -38,6 +39,8 @@ property orderFinished : {}
 
 property destPath : ""
 property pollTimer : missing value
+property bashPID : ""
+property stopButton : missing value
 
 property greenColor : missing value
 property grayColor : missing value
@@ -50,6 +53,7 @@ on run
 
 	set theApp to current application's NSApplication's sharedApplication()
 	theApp's setActivationPolicy:0 -- NSApplicationActivationPolicyRegular
+	my buildMenuBar()
 
 	my buildWindow()
 	my showStep(1)
@@ -62,6 +66,22 @@ on run
 end run
 
 -- ------------------------------------------------------------- UI build --
+
+on buildMenuBar()
+	-- a minimal app menu is all that's needed for macOS to wire up Cmd-Q
+	-- (and other standard shortcuts) to this app; without any menu bar at
+	-- all, there is nothing for Cmd-Q to trigger
+	set mainMenu to current application's NSMenu's alloc()'s init()
+
+	set appMenuItem to current application's NSMenuItem's alloc()'s init()
+	mainMenu's addItem:appMenuItem
+	set appMenu to current application's NSMenu's alloc()'s init()
+	set quitItem to current application's NSMenuItem's alloc()'s initWithTitle:"Quit DownloadWindobona" action:"terminate:" keyEquivalent:"q"
+	appMenu's addItem:quitItem
+	appMenuItem's setSubmenu:appMenu
+
+	current application's NSApplication's sharedApplication()'s setMainMenu:mainMenu
+end buildMenuBar
 
 on buildWindow()
 	set W to 580
@@ -97,10 +117,15 @@ on buildWindow()
 
 	-- page 1: add URLs
 	set page1 to current application's NSView's alloc()'s initWithFrame:(current application's NSMakeRect(20, 60, 540, 350))
-	set instr1 to my makeLabel("Paste one or more Windobona order URLs, one per line:", 0, 320, 500, 24, false)
+	set instr1 to my makeLabel("Paste one or more Windobona order URLs, one per line:", 0, 320, 540, 20, false)
 	page1's addSubview:instr1
 
-	set urlScroll to current application's NSScrollView's alloc()'s initWithFrame:(current application's NSMakeRect(0, 40, 540, 270))
+	set exampleLabel to my makeLabel("e.g. " & WINDOBONA_BASE & "«code»  — or just paste the «code» part by itself", 0, 298, 540, 18, false)
+	exampleLabel's setTextColor:grayColor
+	exampleLabel's setFont:(current application's NSFont's systemFontOfSize:11)
+	page1's addSubview:exampleLabel
+
+	set urlScroll to current application's NSScrollView's alloc()'s initWithFrame:(current application's NSMakeRect(0, 40, 540, 250))
 	urlScroll's setHasVerticalScroller:true
 	urlScroll's setBorderType:2 -- NSBezelBorder
 	set urlTextView to current application's NSTextView's alloc()'s initWithFrame:(current application's NSMakeRect(0, 0, 540, 270))
@@ -170,7 +195,8 @@ on buildWindow()
 	ordersScroll's setDocumentView:ordersContainer
 	page3's addSubview:ordersScroll
 
-	set summaryLabel to my makeLabel("", 0, 5, 420, 30, false)
+	set summaryLabel to my makeLabel("", 0, 0, 420, 55, false)
+	(summaryLabel's cell())'s setWraps:true
 	summaryLabel's setHidden:true
 	page3's addSubview:summaryLabel
 
@@ -181,6 +207,14 @@ on buildWindow()
 	closeButton's setAction:"closeClicked:"
 	closeButton's setHidden:true
 	page3's addSubview:closeButton
+
+	set stopButton to current application's NSButton's alloc()'s initWithFrame:(current application's NSMakeRect(440, 0, 100, 32))
+	stopButton's setTitle:"Stop"
+	stopButton's setBezelStyle:1 -- NSBezelStyleRounded
+	stopButton's setTarget:me
+	stopButton's setAction:"stopClicked:"
+	stopButton's setHidden:true
+	page3's addSubview:stopButton
 
 	contentView's addSubview:page3
 	page3's setHidden:true
@@ -249,7 +283,10 @@ on step1Next:sender
 	set cleanURLs to {}
 	repeat with l in theLines
 		set t to my trimText(l as text)
-		if t is not "" then set end of cleanURLs to t
+		if t is not "" then
+			if t does not start with "http" then set t to WINDOBONA_BASE & t
+			set end of cleanURLs to t
+		end if
 	end repeat
 
 	if (count of cleanURLs) is 0 then
@@ -283,70 +320,83 @@ end chooseFolder:
 on step2Start:sender
 	if destPath is "" then return
 
-	set tsSeed to do shell script "date +%s"
-	set logPaths to {}
-	set orderBars to {}
-	set orderStatusLabels to {}
-	set orderTotals to {}
-	set orderDone to {}
-	set orderFinished to {}
+	set cp to "init"
+	try
+		set cp to "date seed"
+		set tsSeed to do shell script "date +%s"
+		set logPath to "/tmp/downloadwindobona_" & tsSeed & ".log"
+		set orderBars to {}
+		set orderStatusLabels to {}
+		set orderTotals to {}
+		set orderDone to {}
+		set orderFinished to {}
 
-	set rowH to 54
-	set n to count of queuedURLs
-	set containerH to n * rowH
-	if containerH < 255 then set containerH to 255
-	ordersContainer's setFrame:(current application's NSMakeRect(0, 0, 520, containerH))
+		set cp to "container frame"
+		set rowH to 54
+		set n to count of queuedURLs
+		set containerH to n * rowH
+		if containerH < 255 then set containerH to 255
+		ordersContainer's setFrame:(current application's NSMakeRect(0, 0, 520, containerH))
 
-	repeat with i from 1 to n
-		set u to item i of queuedURLs
-		set lp to "/tmp/downloadwindobona_" & tsSeed & "_" & i & ".log"
-		set end of logPaths to lp
-		set end of orderTotals to 0
-		set end of orderDone to 0
-		set end of orderFinished to false
+		set urlArgs to ""
+		repeat with i from 1 to n
+			set cp to "loop " & i & ": setup"
+			set u to item i of queuedURLs
+			set end of orderTotals to 0
+			set end of orderDone to 0
+			set end of orderFinished to false
 
-		set rowTop to containerH - (i * rowH)
-		set shortURL to my shortenURL(u)
+			set rowTop to containerH - (i * rowH)
+			set shortURL to my shortenURL(u)
 
-		set rowLabel to my makeLabel("Order " & i & " — " & shortURL, 0, rowTop + 32, 520, 18, false)
-		ordersContainer's addSubview:rowLabel
+			set cp to "loop " & i & ": label"
+			set rowLabel to my makeLabel("Order " & i & " — " & shortURL, 0, rowTop + 32, 520, 18, false)
+			ordersContainer's addSubview:rowLabel
 
-		set rowBar to current application's NSProgressIndicator's alloc()'s initWithFrame:(current application's NSMakeRect(0, rowTop + 10, 390, 16))
-		rowBar's setIndeterminate:false
-		rowBar's setMinValue:0
-		rowBar's setMaxValue:100
-		rowBar's setDoubleValue:0
-		ordersContainer's addSubview:rowBar
-		set end of orderBars to rowBar
+			set cp to "loop " & i & ": progress bar"
+			set rowBar to current application's NSProgressIndicator's alloc()'s initWithFrame:(current application's NSMakeRect(0, rowTop + 10, 390, 16))
+			rowBar's setIndeterminate:false
+			rowBar's setMinValue:0
+			rowBar's setMaxValue:100
+			rowBar's setDoubleValue:0
+			ordersContainer's addSubview:rowBar
+			set end of orderBars to rowBar
 
-		set rowStatus to my makeLabel("queued…", 400, rowTop + 10, 120, 16, false)
-		ordersContainer's addSubview:rowStatus
-		set end of orderStatusLabels to rowStatus
+			set cp to "loop " & i & ": status label"
+			set rowStatus to my makeLabel("queued…", 400, rowTop + 10, 120, 16, false)
+			ordersContainer's addSubview:rowStatus
+			set end of orderStatusLabels to rowStatus
 
-		set cmd to "nohup /bin/bash " & quoted form of my scriptPath() & " " & quoted form of u & " " & quoted form of destPath & " > " & quoted form of lp & " 2>&1 < /dev/null & echo $!"
-		do shell script cmd
-	end repeat
+			set urlArgs to urlArgs & " " & quoted form of u
+		end repeat
 
-	my showStep(3)
+		set cp to "launch"
+		set cmd to "nohup /bin/bash " & quoted form of my scriptPath() & " " & quoted form of destPath & urlArgs & " > " & quoted form of logPath & " 2>&1 < /dev/null & echo $!"
+		set bashPID to do shell script cmd
 
-	set pollTimer to current application's NSTimer's scheduledTimerWithTimeInterval:0.5 target:me selector:"pollProgress:" userInfo:(missing value) repeats:true
+		set cp to "showStep 3"
+		my showStep(3)
+		stopButton's setHidden:false
+
+		set cp to "start timer"
+		set pollTimer to current application's NSTimer's scheduledTimerWithTimeInterval:0.5 target:me selector:"pollProgress:" userInfo:(missing value) repeats:true
+	on error errMsg number errNum
+		my showAlert("Start failed at [" & cp & "] (" & errNum & ")", errMsg)
+	end try
 end step2Start:
 
 on pollProgress:sender
-	set totalAll to 0
-	set doneAll to 0
+	set n to count of queuedURLs
+	set logText to my readFile(logPath)
 	set allDone to true
 
-	set n to count of logPaths
 	repeat with i from 1 to n
 		if (item i of orderFinished) is false then
 			set allDone to false
-			set lp to item i of logPaths
-			set logText to my readFile(lp)
 			if logText is not "" then
-				set finalLine to my lastLineStartingWith(logText, "FINAL ")
-				set errorLine to my lastLineStartingWith(logText, "ERROR ")
-				set stateLine to my lastLineStartingWith(logText, "STATE ")
+				set finalLine to my lastLineStartingWith(logText, "FINAL order=" & i & " ")
+				set errorLine to my lastLineStartingWith(logText, "ERROR order=" & i & " ")
+				set stateLine to my lastLineStartingWith(logText, "STATE order=" & i & " ")
 
 				set theBar to item i of orderBars
 				set theStatus to item i of orderStatusLabels
@@ -402,6 +452,7 @@ on pollProgress:sender
 		pollTimer's invalidate()
 		summaryLabel's setStringValue:("Downloaded " & doneAll & " of " & totalAll & " videos." & return & "Saved to: " & destPath)
 		summaryLabel's setHidden:false
+		stopButton's setHidden:true
 		closeButton's setHidden:false
 	end if
 end pollProgress:
@@ -409,6 +460,32 @@ end pollProgress:
 on closeClicked:sender
 	current application's NSApplication's sharedApplication()'s terminate:me
 end closeClicked:
+
+on stopClicked:sender
+	if pollTimer is not missing value then pollTimer's invalidate()
+	if bashPID is not "" then
+		try
+			do shell script "kill " & bashPID & " 2>/dev/null; sleep 0.3; kill -9 " & bashPID & " 2>/dev/null; pkill -9 -f " & quoted form of my scriptPath() & " 2>/dev/null"
+		end try
+	end if
+
+	set doneAll to 0
+	set totalAll to 0
+	repeat with i from 1 to (count of queuedURLs)
+		if (item i of orderFinished) is false then
+			set item i of orderFinished to true
+			(item i of orderStatusLabels)'s setStringValue:"Stopped"
+			(item i of orderStatusLabels)'s setTextColor:redColor
+		end if
+		set doneAll to doneAll + (item i of orderDone)
+		set totalAll to totalAll + (item i of orderTotals)
+	end repeat
+
+	summaryLabel's setStringValue:("Stopped after " & doneAll & " of " & totalAll & " videos." & return & "Already-downloaded files are kept — re-running the same order(s) will pick up where this left off." & return & "Saved to: " & destPath)
+	summaryLabel's setHidden:false
+	stopButton's setHidden:true
+	closeButton's setHidden:false
+end stopClicked:
 
 on windowWillClose:aNotification
 	current application's NSApplication's sharedApplication()'s terminate:me
@@ -457,7 +534,8 @@ end extractJSONString
 -- -------------------------------------------------------------- helpers --
 
 on scriptPath()
-	return (POSIX path of (path to me)) & "Contents/Resources/download_windobona.sh"
+	set bundlePath to (current application's NSBundle's mainBundle()'s bundlePath()) as text
+	return bundlePath & "/Contents/Resources/download_windobona.sh"
 end scriptPath
 
 on readFile(p)
