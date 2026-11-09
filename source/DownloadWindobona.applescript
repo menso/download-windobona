@@ -1,6 +1,7 @@
 use AppleScript version "2.4"
 use scripting additions
 use framework "Cocoa"
+use framework "AVFoundation"
 
 property parent : class "NSObject"
 
@@ -42,6 +43,11 @@ property destPath : ""
 property pollTimer : missing value
 property bashPID : ""
 property stopButton : missing value
+
+property rotationCams : {}
+property rotationDegrees : {}
+property rotWin : missing value
+property rotButtons : {}
 
 property greenColor : missing value
 property grayColor : missing value
@@ -312,8 +318,103 @@ on step1Next:sender
 	end if
 
 	set queuedURLs to cleanURLs
+	my loadRotationPrefs()
+	my askRotationChoice()
 	my showStep(2)
 end step1Next:
+
+on showRotationEditor()
+	set cams to my detectCamerasAcrossURLs(queuedURLs)
+	if (count of cams) is 0 then
+		-- couldn't reach the server to find out which cameras exist; fall
+		-- back to the known default range rather than showing an empty table
+		set cams to {0, 1, 2, 3, 4}
+	end if
+
+	set colLabels to {"No rotation", "90° CW", "90° CCW", "180°"}
+	set colDegrees to {0, 90, 270, 180}
+	set colW to 110
+	set labelW to 90
+	set rowH to 30
+	set gridW to labelW + (colW * 4)
+	set gridH to rowH * ((count of cams) + 1)
+
+	set gridView to current application's NSView's alloc()'s initWithFrame:(current application's NSMakeRect(0, 0, gridW, gridH))
+
+	repeat with c from 1 to 4
+		set hdr to my makeLabel(item c of colLabels, labelW + ((c - 1) * colW), gridH - rowH, colW, 20, true)
+		gridView's addSubview:hdr
+	end repeat
+
+	set rotButtons to {}
+	set rowIdx to 0
+	repeat with camN in cams
+		set rowIdx to rowIdx + 1
+		set rowTop to gridH - rowH - (rowIdx * rowH)
+		set camLabel to my makeLabel("Camera " & camN, 0, rowTop + 4, labelW, 20, false)
+		gridView's addSubview:camLabel
+
+		set rowContainer to current application's NSView's alloc()'s initWithFrame:(current application's NSMakeRect(labelW, rowTop, colW * 4, rowH))
+		gridView's addSubview:rowContainer
+
+		set curDeg to my degreesForCam(camN)
+		set rowButtonSet to {}
+		repeat with c from 1 to 4
+			set rb to current application's NSButton's alloc()'s initWithFrame:(current application's NSMakeRect((c - 1) * colW + colW / 2 - 10, 4, 20, 20))
+			rb's setButtonType:4 -- NSButtonTypeRadio
+			rb's setTitle:""
+			if curDeg is (item c of colDegrees) then
+				rb's setState:1
+			else
+				rb's setState:0
+			end if
+			rowContainer's addSubview:rb
+			set end of rowButtonSet to rb
+		end repeat
+		set end of rotButtons to {camera:camN, buttons:rowButtonSet}
+	end repeat
+
+	set theAlert to current application's NSAlert's alloc()'s init()
+	theAlert's setMessageText:"Customize Rotations"
+	theAlert's setInformativeText:"Pick one rotation per camera."
+	(theAlert's addButtonWithTitle:"Save")
+	(theAlert's addButtonWithTitle:"Cancel")
+	theAlert's setAccessoryView:gridView
+
+	set theResponse to theAlert's runModal() as integer
+	if theResponse is 1000 then
+		set rotationCams to {}
+		set rotationDegrees to {}
+		repeat with rowRec in rotButtons
+			set camN to camera of rowRec
+			set btns to buttons of rowRec
+			set chosenDeg to 0
+			repeat with c from 1 to 4
+				if ((item c of btns)'s state() as integer) is 1 then
+					set chosenDeg to item c of colDegrees
+				end if
+			end repeat
+			set end of rotationCams to camN
+			set end of rotationDegrees to chosenDeg
+		end repeat
+		my saveRotationPrefs()
+	end if
+end showRotationEditor
+
+on askRotationChoice()
+	set theAlert to current application's NSAlert's alloc()'s init()
+	theAlert's setMessageText:"Use default rotation settings?"
+	theAlert's setInformativeText:"Camera 4 is normally mounted sideways and gets rotated 90° automatically; every other camera is left as-is. Choose Customize to set this per camera instead."
+	(theAlert's addButtonWithTitle:"Use Defaults")
+	(theAlert's addButtonWithTitle:"Customize Rotations…")
+	set theResponse to theAlert's runModal() as integer
+	-- NSAlertFirstButtonReturn = 1000, NSAlertSecondButtonReturn = 1001
+	if theResponse is 1000 then
+		my saveRotationPrefs()
+	else
+		my showRotationEditor()
+	end if
+end askRotationChoice
 
 on step2Back:sender
 	my showStep(1)
@@ -477,12 +578,37 @@ on pollProgress:sender
 
 	if allDone then
 		pollTimer's invalidate()
-		summaryLabel's setStringValue:("Downloaded " & succeededAll & " of " & totalAll & " videos." & return & "Saved to: " & destPath)
+		overallLabel's setStringValue:"Applying rotation settings…"
+		set rotatedCount to my applyRotations(destPath)
+		set rotSuffix to ""
+		if rotatedCount > 0 then set rotSuffix to return & "Rotated " & rotatedCount & " video(s) per your settings."
+		summaryLabel's setStringValue:("Downloaded " & succeededAll & " of " & totalAll & " videos." & rotSuffix & return & "Saved to: " & destPath)
 		summaryLabel's setHidden:false
 		stopButton's setHidden:true
 		closeButton's setHidden:false
 	end if
 end pollProgress:
+
+on applyRotations(rootPath)
+	set rotatedCount to 0
+	repeat with idx from 1 to (count of rotationCams)
+		set camN to item idx of rotationCams
+		set deg to item idx of rotationDegrees
+		if deg is not 0 then
+			try
+				set findCmd to "find " & quoted form of rootPath & " -type f -name " & quoted form of ("*_cam" & camN & ".mp4")
+				set fileList to do shell script findCmd
+				repeat with fPath in (paragraphs of fileList)
+					set fPath to fPath as text
+					if fPath is not "" then
+						if my rotateFile(fPath, deg) then set rotatedCount to rotatedCount + 1
+					end if
+				end repeat
+			end try
+		end if
+	end repeat
+	return rotatedCount
+end applyRotations
 
 on closeClicked:sender
 	current application's NSApplication's sharedApplication()'s terminate:me
@@ -527,10 +653,12 @@ end openReleasePage:
 on checkForUpdate()
 	try
 		set theURL to current application's NSURL's URLWithString:("https://api.github.com/repos/" & GITHUB_REPO & "/releases/latest")
-		set nsJsonStr to current application's NSString's stringWithContentsOfURL:theURL encoding:4 |error|:(missing value) -- 4 = NSUTF8StringEncoding
-		if nsJsonStr is missing value then return
+		set theRequest to current application's NSMutableURLRequest's requestWithURL:theURL
+		theRequest's setTimeoutInterval:4.0
+		set theData to current application's NSURLConnection's sendSynchronousRequest:theRequest returningResponse:(missing value) |error|:(missing value)
+		if theData is missing value then return
 
-		set jsonStr to nsJsonStr as text
+		set jsonStr to (current application's NSString's alloc()'s initWithData:theData encoding:4) as text -- 4 = NSUTF8StringEncoding
 		set tagValue to my extractJSONString(jsonStr, "tag_name")
 		if tagValue is "" then return
 
@@ -560,6 +688,100 @@ end extractJSONString
 
 -- -------------------------------------------------------------- helpers --
 
+on rotationPrefsPath()
+	return (POSIX path of (path to home folder)) & "Library/Application Support/DownloadWindobona/rotation.conf"
+end rotationPrefsPath
+
+on loadRotationPrefs()
+	-- defaults: cam4 gets 90deg (clockwise), everything else 0 -- matches
+	-- how these cameras are physically mounted in the typical setup
+	set rotationCams to {0, 1, 2, 3, 4}
+	set rotationDegrees to {0, 0, 0, 0, 90}
+
+	set p to my rotationPrefsPath()
+	set fileText to my readFile(p)
+	if fileText is "" then return
+
+	repeat with l in (paragraphs of fileText)
+		set l to l as text
+		if l contains "=" then
+			set AppleScript's text item delimiters to "="
+			set parts to text items of l
+			set AppleScript's text item delimiters to ""
+			if (count of parts) is 2 then
+				set camText to item 1 of parts
+				if camText begins with "cam" then
+					try
+						set camNum to (text 4 thru -1 of camText) as integer
+						set degNum to (item 2 of parts) as integer
+						repeat with idx from 1 to (count of rotationCams)
+							if (item idx of rotationCams) is camNum then
+								set item idx of rotationDegrees to degNum
+							end if
+						end repeat
+						if camNum is not in rotationCams then
+							set end of rotationCams to camNum
+							set end of rotationDegrees to degNum
+						end if
+					end try
+				end if
+			end if
+		end if
+	end repeat
+end loadRotationPrefs
+
+on saveRotationPrefs()
+	set p to my rotationPrefsPath()
+	set dirPath to (POSIX path of (path to home folder)) & "Library/Application Support/DownloadWindobona"
+	do shell script "mkdir -p " & quoted form of dirPath
+
+	set outLines to {}
+	repeat with idx from 1 to (count of rotationCams)
+		set end of outLines to ("cam" & (item idx of rotationCams) & "=" & (item idx of rotationDegrees))
+	end repeat
+	set outText to my joinList(outLines, return)
+
+	set nsText to current application's NSString's stringWithString:outText
+	(nsText's writeToFile:p atomically:true encoding:4 |error|:(missing value)) -- 4 = NSUTF8StringEncoding
+end saveRotationPrefs
+
+on degreesForCam(camNum)
+	repeat with idx from 1 to (count of rotationCams)
+		if (item idx of rotationCams) is camNum then return (item idx of rotationDegrees)
+	end repeat
+	return 0
+end degreesForCam
+
+on detectCamerasAcrossURLs(urlList)
+	-- a quick, synchronous fetch+parse (no downloads) just to find which
+	-- camera numbers this set of orders actually uses, for the rotation
+	-- customize table
+	set shellLines to {}
+	repeat with u in urlList
+		set end of shellLines to ("curl -sS -X POST -H 'Content-Type: application/json' --max-time 15 " & quoted form of (u as text) & " 2>/dev/null")
+	end repeat
+	-- build the API url per order the same way the download engine does
+	set camSet to {}
+	repeat with u in urlList
+		set uText to u as text
+		set secText to do shell script "printf '%s' " & quoted form of uText & " | sed -E 's#/+$##' | sed -E 's#.*/##'"
+		set hostText to do shell script "printf '%s' " & quoted form of uText & " | sed -E 's#^(https?://[^/]+).*#\\1#'"
+		set apiURL to hostText & "/api/media?sec=" & secText
+		try
+			set jsonText to do shell script "curl -sS -X POST -H 'Content-Type: application/json' --max-time 15 " & quoted form of apiURL
+			set camsText to do shell script "printf '%s' " & quoted form of jsonText & " | grep -oE '_cam[0-9]+_' | sed -E 's/_cam([0-9]+)_/\\1/' | sort -nu"
+			repeat with camLine in (paragraphs of camsText)
+				set camLine to camLine as text
+				if camLine is not "" then
+					set camN to camLine as integer
+					if camN is not in camSet then set end of camSet to camN
+				end if
+			end repeat
+		end try
+	end repeat
+	return camSet
+end detectCamerasAcrossURLs
+
 on scriptPath()
 	set bundlePath to (current application's NSBundle's mainBundle()'s bundlePath()) as text
 	return bundlePath & "/Contents/Resources/download_windobona.sh"
@@ -574,6 +796,80 @@ on readFile(p)
 		return ""
 	end try
 end readFile
+
+on rotateFile(filePath, degrees)
+	-- rewrites the video's orientation metadata only -- a passthrough
+	-- export, so there is no re-encoding or quality loss, just a fast remux
+	if degrees is 0 then return true
+
+	try
+		set srcURL to current application's NSURL's fileURLWithPath:filePath
+		set asset to current application's AVURLAsset's URLAssetWithURL:srcURL options:(missing value)
+		set videoTracks to asset's tracksWithMediaType:(current application's AVMediaTypeVideo)
+		if (count of videoTracks) is 0 then return false
+		set vTrack to item 1 of videoTracks
+		set trackSize to vTrack's naturalSize()
+		set w to width of trackSize
+		set h to height of trackSize
+
+		set composition to current application's AVMutableComposition's composition()
+		set compVideoTrack to composition's addMutableTrackWithMediaType:(current application's AVMediaTypeVideo) preferredTrackID:(current application's kCMPersistentTrackID_Invalid)
+		set assetDuration to asset's duration()
+		set fullRange to current application's CMTimeRangeMake(current application's kCMTimeZero, assetDuration)
+		compVideoTrack's insertTimeRange:fullRange ofTrack:vTrack atTime:(current application's kCMTimeZero) |error|:(missing value)
+
+		if degrees is 90 then
+			set theTransform to current application's CGAffineTransformMake(0, 1, -1, 0, h, 0)
+		else if degrees is 270 then
+			set theTransform to current application's CGAffineTransformMake(0, -1, 1, 0, 0, w)
+		else if degrees is 180 then
+			set theTransform to current application's CGAffineTransformMake(-1, 0, 0, -1, w, h)
+		else
+			set theTransform to vTrack's preferredTransform()
+		end if
+		compVideoTrack's setPreferredTransform:theTransform
+
+		set audioTracks to asset's tracksWithMediaType:(current application's AVMediaTypeAudio)
+		if (count of audioTracks) > 0 then
+			set aTrack to item 1 of audioTracks
+			set compAudioTrack to composition's addMutableTrackWithMediaType:(current application's AVMediaTypeAudio) preferredTrackID:(current application's kCMPersistentTrackID_Invalid)
+			compAudioTrack's insertTimeRange:fullRange ofTrack:aTrack atTime:(current application's kCMTimeZero) |error|:(missing value)
+		end if
+
+		set tmpPath to filePath & ".rotating.mp4"
+		try
+			current application's NSFileManager's defaultManager()'s removeItemAtPath:tmpPath |error|:(missing value)
+		end try
+
+		set exportSession to current application's AVAssetExportSession's alloc()'s initWithAsset:composition presetName:(current application's AVAssetExportPresetPassthrough)
+		exportSession's setOutputURL:(current application's NSURL's fileURLWithPath:tmpPath)
+		exportSession's setOutputFileType:(current application's AVFileTypeMPEG4)
+		exportSession's exportAsynchronouslyWithCompletionHandler:(missing value)
+
+		set isDone to false
+		repeat until isDone
+			set theStatus to exportSession's status() as integer
+			if theStatus is greater than or equal to 3 then
+				set isDone to true
+			else
+				delay 0.2
+			end if
+		end repeat
+
+		if theStatus is 3 then
+			current application's NSFileManager's defaultManager()'s removeItemAtPath:filePath |error|:(missing value)
+			current application's NSFileManager's defaultManager()'s moveItemAtPath:tmpPath toPath:filePath |error|:(missing value)
+			return true
+		else
+			try
+				current application's NSFileManager's defaultManager()'s removeItemAtPath:tmpPath |error|:(missing value)
+			end try
+			return false
+		end if
+	on error
+		return false
+	end try
+end rotateFile
 
 on trimText(t)
 	set t to t as text
