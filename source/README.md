@@ -1,8 +1,8 @@
 # DownloadWindobona
 
-Downloads every video from a Windobona media-order page (indoor skydiving /
-paragliding footage, e.g. `https://bestellung.windobona.berlin/media/<code>`)
-into neatly named per-flight folders.
+Downloads every video from a Windobona media-order page (indoor skydiving
+footage, e.g. `https://bestellung.windobona.berlin/media/<code>`) into
+neatly named per-flight folders.
 
 ## Running it
 
