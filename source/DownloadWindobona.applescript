@@ -35,6 +35,7 @@ property orderBars : {}
 property orderStatusLabels : {}
 property orderTotals : {}
 property orderDone : {}
+property orderSucceeded : {}
 property orderFinished : {}
 
 property destPath : ""
@@ -79,6 +80,22 @@ on buildMenuBar()
 	set quitItem to current application's NSMenuItem's alloc()'s initWithTitle:"Quit DownloadWindobona" action:"terminate:" keyEquivalent:"q"
 	appMenu's addItem:quitItem
 	appMenuItem's setSubmenu:appMenu
+
+	-- without a real Edit menu, setting any custom main menu at all silences
+	-- the standard Cmd-C/V/X/A/Z bindings that macOS otherwise wires up for
+	-- free -- these items route to the focused text view via nil-target
+	-- first-responder dispatch, exactly like a normal Cocoa app's Edit menu
+	set editMenuItem to current application's NSMenuItem's alloc()'s init()
+	mainMenu's addItem:editMenuItem
+	set editMenu to current application's NSMenu's alloc()'s initWithTitle:"Edit"
+	(editMenu's addItemWithTitle:"Undo" action:"undo:" keyEquivalent:"z")
+	(editMenu's addItemWithTitle:"Redo" action:"redo:" keyEquivalent:"Z")
+	editMenu's addItem:(current application's NSMenuItem's separatorItem())
+	(editMenu's addItemWithTitle:"Cut" action:"cut:" keyEquivalent:"x")
+	(editMenu's addItemWithTitle:"Copy" action:"copy:" keyEquivalent:"c")
+	(editMenu's addItemWithTitle:"Paste" action:"paste:" keyEquivalent:"v")
+	(editMenu's addItemWithTitle:"Select All" action:"selectAll:" keyEquivalent:"a")
+	editMenuItem's setSubmenu:editMenu
 
 	current application's NSApplication's sharedApplication()'s setMainMenu:mainMenu
 end buildMenuBar
@@ -329,6 +346,7 @@ on step2Start:sender
 		set orderStatusLabels to {}
 		set orderTotals to {}
 		set orderDone to {}
+		set orderSucceeded to {}
 		set orderFinished to {}
 
 		set cp to "container frame"
@@ -344,6 +362,7 @@ on step2Start:sender
 			set u to item i of queuedURLs
 			set end of orderTotals to 0
 			set end of orderDone to 0
+			set end of orderSucceeded to 0
 			set end of orderFinished to false
 
 			set rowTop to containerH - (i * rowH)
@@ -402,9 +421,11 @@ on pollProgress:sender
 				set theStatus to item i of orderStatusLabels
 
 				if finalLine is not "" then
+					-- "done" in the FINAL line is already the succeeded count
 					set dN to my valueFor(finalLine, "done")
 					set tN to my valueFor(finalLine, "total")
 					set item i of orderDone to dN
+					set item i of orderSucceeded to dN
 					set item i of orderTotals to tN
 					theBar's setDoubleValue:100
 					theStatus's setStringValue:("Done " & dN & "/" & tN)
@@ -417,17 +438,19 @@ on pollProgress:sender
 				else if stateLine is not "" then
 					set tN to my valueFor(stateLine, "total")
 					set dN to my valueFor(stateLine, "done")
+					set sN to my valueFor(stateLine, "succeeded")
 					set aN to my valueFor(stateLine, "active")
 					set item i of orderTotals to tN
 					set item i of orderDone to dN
+					set item i of orderSucceeded to sN
 					if tN > 0 then
 						set pct to (dN / tN) * 100
 						theBar's setDoubleValue:pct
 					end if
 					if aN > 0 then
-						theStatus's setStringValue:((dN as text) & "/" & (tN as text) & " • " & (aN as text) & " active")
+						theStatus's setStringValue:((sN as text) & "/" & (tN as text) & " • " & (aN as text) & " active")
 					else
-						theStatus's setStringValue:((dN as text) & "/" & (tN as text))
+						theStatus's setStringValue:((sN as text) & "/" & (tN as text))
 					end if
 				end if
 			end if
@@ -436,21 +459,25 @@ on pollProgress:sender
 
 	set totalAll to 0
 	set doneAll to 0
+	set succeededAll to 0
 	repeat with i from 1 to n
 		set totalAll to totalAll + (item i of orderTotals)
 		set doneAll to doneAll + (item i of orderDone)
+		set succeededAll to succeededAll + (item i of orderSucceeded)
 	end repeat
 
 	if totalAll > 0 then
+		-- the bar fills based on total processed (so it reliably reaches
+		-- 100%), but the number shown is successful downloads only
 		set overallPct to (doneAll / totalAll) * 100
 		overallBar's setDoubleValue:overallPct
 		set pctInt to round overallPct
-		overallLabel's setStringValue:("Overall Progress: " & pctInt & "%  (" & doneAll & " of " & totalAll & ")")
+		overallLabel's setStringValue:("Overall Progress: " & pctInt & "%  (" & succeededAll & " of " & totalAll & ")")
 	end if
 
 	if allDone then
 		pollTimer's invalidate()
-		summaryLabel's setStringValue:("Downloaded " & doneAll & " of " & totalAll & " videos." & return & "Saved to: " & destPath)
+		summaryLabel's setStringValue:("Downloaded " & succeededAll & " of " & totalAll & " videos." & return & "Saved to: " & destPath)
 		summaryLabel's setHidden:false
 		stopButton's setHidden:true
 		closeButton's setHidden:false
@@ -469,7 +496,7 @@ on stopClicked:sender
 		end try
 	end if
 
-	set doneAll to 0
+	set succeededAll to 0
 	set totalAll to 0
 	repeat with i from 1 to (count of queuedURLs)
 		if (item i of orderFinished) is false then
@@ -477,11 +504,11 @@ on stopClicked:sender
 			(item i of orderStatusLabels)'s setStringValue:"Stopped"
 			(item i of orderStatusLabels)'s setTextColor:redColor
 		end if
-		set doneAll to doneAll + (item i of orderDone)
+		set succeededAll to succeededAll + (item i of orderSucceeded)
 		set totalAll to totalAll + (item i of orderTotals)
 	end repeat
 
-	summaryLabel's setStringValue:("Stopped after " & doneAll & " of " & totalAll & " videos." & return & "Already-downloaded files are kept — re-running the same order(s) will pick up where this left off." & return & "Saved to: " & destPath)
+	summaryLabel's setStringValue:("Stopped after " & succeededAll & " of " & totalAll & " videos." & return & "Already-downloaded files are kept — re-running the same order(s) will pick up where this left off." & return & "Saved to: " & destPath)
 	summaryLabel's setHidden:false
 	stopButton's setHidden:true
 	closeButton's setHidden:false

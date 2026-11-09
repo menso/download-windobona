@@ -231,7 +231,7 @@ process_item() {
 }
 
 report_progress() {
-    local order total done_count active_count pct_sum avgpct f v grand_done
+    local order total done_count succeeded_count active_count pct_sum avgpct f v grand_done
 
     while true; do
         grand_done=0
@@ -239,9 +239,11 @@ report_progress() {
             total="${ORDER_TOTAL[$order]}"
 
             done_count=0
+            succeeded_count=0
             for f in "$WORKDIR"/status/"${order}-"*; do
                 [ -e "$f" ] || continue
                 done_count=$((done_count + 1))
+                [ "$(cat "$f" 2>/dev/null)" = "success" ] && succeeded_count=$((succeeded_count + 1))
             done
 
             active_count=0
@@ -256,7 +258,11 @@ report_progress() {
             avgpct=0
             [ "$active_count" -gt 0 ] && avgpct=$((pct_sum / active_count))
 
-            echo "STATE order=$order total=$total done=$done_count active=$active_count avgpct=$avgpct"
+            # "done" (total processed, including skips) drives the progress
+            # bar fill so it reliably reaches 100%; "succeeded" is the count
+            # the UI shows, so a skipped/no-video link doesn't look like a
+            # finished download before anything has actually downloaded
+            echo "STATE order=$order total=$total done=$done_count succeeded=$succeeded_count active=$active_count avgpct=$avgpct"
             grand_done=$((grand_done + done_count))
         done
 
