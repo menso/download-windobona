@@ -318,9 +318,17 @@ on step1Next:sender
 	end if
 
 	set queuedURLs to cleanURLs
-	my loadRotationPrefs()
-	my askRotationChoice()
-	my showStep(2)
+
+	set cp1 to "loadRotationPrefs"
+	try
+		my loadRotationPrefs()
+		set cp1 to "askRotationChoice"
+		my askRotationChoice()
+		set cp1 to "showStep 2"
+		my showStep(2)
+	on error errMsg1 number errNum1
+		my showAlert("Step 1 → 2 failed at [" & cp1 & "] (" & errNum1 & ")", errMsg1)
+	end try
 end step1Next:
 
 on showRotationEditor()
@@ -899,6 +907,13 @@ on rotateFile(filePath, degrees)
 		return false
 	end try
 end rotateFile
+
+on joinList(theList, delim)
+	set AppleScript's text item delimiters to delim
+	set joined to theList as string
+	set AppleScript's text item delimiters to ""
+	return joined
+end joinList
 
 on trimText(t)
 	set t to t as text
