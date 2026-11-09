@@ -52,6 +52,7 @@ property rotationCams : {}
 property rotationDegrees : {}
 property rotWin : missing value
 property rotButtons : {}
+property rotRowDeg : {}
 
 property greenColor : missing value
 property grayColor : missing value
@@ -132,7 +133,7 @@ on buildWindow()
 	set W to 580
 	set H to 486
 	set contentRect to current application's NSMakeRect(200, 200, W, H)
-	set styleMask to 3 -- NSWindowStyleMaskTitled (1) + NSWindowStyleMaskClosable (2)
+	set styleMask to 7 -- NSWindowStyleMaskTitled (1) + Closable (2) + Miniaturizable (4)
 	set win to current application's NSWindow's alloc()'s initWithContentRect:contentRect styleMask:styleMask backing:2 defer:false -- 2 = NSBackingStoreBuffered
 	win's setTitle:("DownloadWindobona " & CURRENT_VERSION)
 	win's setReleasedWhenClosed:false
@@ -387,6 +388,7 @@ on showRotationEditor()
 	end repeat
 
 	set rotButtons to {}
+	set rotRowDeg to {}
 	set rowIdx to 0
 	repeat with camN in cams
 		set rowIdx to rowIdx + 1
@@ -395,6 +397,7 @@ on showRotationEditor()
 		gridView's addSubview:camLabel
 
 		set curDeg to my degreesForCam(camN)
+		set end of rotRowDeg to curDeg
 		set rowButtonSet to {}
 		repeat with c from 1 to 4
 			-- each button gets its OWN superview so AppKit's automatic
@@ -408,7 +411,12 @@ on showRotationEditor()
 			set rb to current application's NSButton's alloc()'s initWithFrame:(current application's NSMakeRect(colW / 2 - 10, 4, 20, 20))
 			rb's setButtonType:4 -- NSButtonTypeRadio
 			rb's setTitle:""
-			rb's setTag:rowIdx
+			-- tag encodes both the row and this button's own degree value, so
+			-- the click handler can update rotRowDeg directly rather than
+			-- needing to re-read .state() off every button after the alert
+			-- closes, which turned out not to reliably reflect the user's
+			-- actual selection by the time Save was read
+			rb's setTag:(rowIdx * 1000 + (item c of colDegrees))
 			rb's setTarget:me
 			rb's setAction:"rotRadioClicked:"
 			if curDeg is (item c of colDegrees) then
@@ -433,35 +441,34 @@ on showRotationEditor()
 	if theResponse is 1000 then
 		set rotationCams to {}
 		set rotationDegrees to {}
-		repeat with rowRec in rotButtons
-			set camN to camera of rowRec
-			set btns to buttons of rowRec
-			set chosenDeg to 0
-			repeat with c from 1 to 4
-				if ((item c of btns)'s state() as integer) is 1 then
-					set chosenDeg to item c of colDegrees
-				end if
-			end repeat
+		repeat with rowIdx2 from 1 to (count of rotButtons)
+			set camN to camera of (item rowIdx2 of rotButtons)
 			set end of rotationCams to camN
-			set end of rotationDegrees to chosenDeg
+			set end of rotationDegrees to (item rowIdx2 of rotRowDeg)
 		end repeat
 		my saveRotationPrefs()
 	end if
 end showRotationEditor
 
 on rotRadioClicked:sender
-	set rowTag to sender's tag() as integer
+	-- tag = rowIndex*1000 + thisButton'sDegree, decoded back into both
+	set fullTag to sender's tag() as integer
+	set clickedRow to fullTag div 1000
+	set clickedDeg to fullTag mod 1000
 	repeat with rowRec in rotButtons
 		set btns to buttons of rowRec
-		-- the row's buttons all share the row's index as their tag, so any
-		-- one of them identifies the row regardless of which was clicked
-		if ((item 1 of btns)'s tag() as integer) is rowTag then
+		set firstRow to ((item 1 of btns)'s tag() as integer) div 1000
+		if firstRow is clickedRow then
 			repeat with b in btns
 				if b is not sender then
 					b's setState:0
 				end if
 			end repeat
 			sender's setState:1
+			-- the saved selection is tracked here directly, rather than by
+			-- re-reading .state() off every button once the alert closes --
+			-- that turned out not to reliably reflect the real selection
+			set item clickedRow of rotRowDeg to clickedDeg
 			exit repeat
 		end if
 	end repeat
