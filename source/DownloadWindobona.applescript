@@ -363,6 +363,13 @@ on showRotationEditor()
 			set rb to current application's NSButton's alloc()'s initWithFrame:(current application's NSMakeRect((c - 1) * colW + colW / 2 - 10, 4, 20, 20))
 			rb's setButtonType:4 -- NSButtonTypeRadio
 			rb's setTitle:""
+			-- mutual exclusion is handled explicitly in rotRadioClicked: below
+			-- rather than relying on AppKit's automatic same-superview
+			-- grouping, which did not reliably exclude across this row/column
+			-- layout when button states were set programmatically
+			rb's setTag:rowIdx
+			rb's setTarget:me
+			rb's setAction:"rotRadioClicked:"
 			if curDeg is (item c of colDegrees) then
 				rb's setState:1
 			else
@@ -400,6 +407,24 @@ on showRotationEditor()
 		my saveRotationPrefs()
 	end if
 end showRotationEditor
+
+on rotRadioClicked:sender
+	set rowTag to sender's tag() as integer
+	repeat with rowRec in rotButtons
+		set btns to buttons of rowRec
+		-- the row's buttons all share the row's index as their tag, so any
+		-- one of them identifies the row regardless of which was clicked
+		if ((item 1 of btns)'s tag() as integer) is rowTag then
+			repeat with b in btns
+				if b is not sender then
+					b's setState:0
+				end if
+			end repeat
+			sender's setState:1
+			exit repeat
+		end if
+	end repeat
+end rotRadioClicked:
 
 on askRotationChoice()
 	set theAlert to current application's NSAlert's alloc()'s init()
@@ -769,7 +794,11 @@ on detectCamerasAcrossURLs(urlList)
 		set apiURL to hostText & "/api/media?sec=" & secText
 		try
 			set jsonText to do shell script "curl -sS -X POST -H 'Content-Type: application/json' --max-time 15 " & quoted form of apiURL
-			set camsText to do shell script "printf '%s' " & quoted form of jsonText & " | grep -oE '_cam[0-9]+_' | sed -E 's/_cam([0-9]+)_/\\1/' | sort -nu"
+			-- only count a camera if it has a genuinely non-empty videoPath
+			-- AND videoPreview on at least one entry -- a bare "_camN_" can
+			-- also show up in an empty/placeholder field for a camera with
+			-- no real clip, which should not appear in this table at all
+			set camsText to do shell script "printf '%s' " & quoted form of jsonText & " | grep -oE '\\{[^{}]*\\}' | grep -E '\"videoPath\"[[:space:]]*:[[:space:]]*\"[^\"]+\"' | grep -E '\"videoPreview\"[[:space:]]*:[[:space:]]*\"[^\"]+\"' | grep -oE '_cam[0-9]+_' | sed -E 's/_cam([0-9]+)_/\\1/' | sort -nu"
 			repeat with camLine in (paragraphs of camsText)
 				set camLine to camLine as text
 				if camLine is not "" then
