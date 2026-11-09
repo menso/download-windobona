@@ -1,8 +1,8 @@
 # DownloadWindobona
 
 A double-clickable macOS app that downloads every video from a
-[Windobona](https://windobona.berlin/) media-order page (indoor skydiving /
-paragliding footage) into neatly named per-flight folders.
+[Windobona](https://windobona.berlin/) media-order page (indoor skydiving 
+footage) into neatly named per-flight folders.
 
 ## Download / run
 
