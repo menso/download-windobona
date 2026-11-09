@@ -45,6 +45,7 @@ property bashPID : ""
 property shellWorkDir : ""
 property rotatedKeys : {}
 property totalRotatedCount : 0
+property rotationDebugShown : false
 property stopButton : missing value
 
 property rotationCams : {}
@@ -64,6 +65,7 @@ on run
 	set theApp to current application's NSApplication's sharedApplication()
 	theApp's setActivationPolicy:0 -- NSApplicationActivationPolicyRegular
 	my buildMenuBar()
+	my setDockIcon()
 
 	my buildWindow()
 	my showStep(1)
@@ -76,6 +78,22 @@ on run
 end run
 
 -- ------------------------------------------------------------- UI build --
+
+on setDockIcon()
+	-- Cocoa doesn't always auto-pick-up the bundle's icon for the *running*
+	-- app's Dock/minimized-window representation on a plain ASOC applet
+	-- like this one, even though the file's own Finder icon is correct --
+	-- set it explicitly to be sure
+	try
+		set iconPath to current application's NSBundle's mainBundle()'s pathForResource:"applet" ofType:"icns"
+		if iconPath is not missing value then
+			set iconImage to current application's NSImage's alloc()'s initWithContentsOfFile:iconPath
+			if iconImage is not missing value then
+				(current application's NSApplication's sharedApplication())'s setApplicationIconImage:iconImage
+			end if
+		end if
+	end try
+end setDockIcon
 
 on buildMenuBar()
 	-- a minimal app menu is all that's needed for macOS to wire up Cmd-Q
@@ -657,13 +675,24 @@ on rotateNewlyFinishedFiles()
 						if camN is not -1 then
 							set deg to my degreesForCam(camN)
 							if deg is not 0 then
-								if my rotateFile(fPath, deg) then set totalRotatedCount to totalRotatedCount + 1
+								set rotOK to my rotateFile(fPath, deg)
+								if rotOK then
+									set totalRotatedCount to totalRotatedCount + 1
+								else if not rotationDebugShown then
+									set rotationDebugShown to true
+									my showAlert("Rotation debug", "rotateFile returned false for: " & fPath & return & "camera=" & camN & " degrees=" & deg)
+								end if
 							end if
 						end if
 					end if
 				end if
 			end if
 		end repeat
+	on error errMsg2 number errNum2
+		if not rotationDebugShown then
+			set rotationDebugShown to true
+			my showAlert("Rotation debug (" & errNum2 & ")", errMsg2 & return & "shellWorkDir=" & shellWorkDir)
+		end if
 	end try
 end rotateNewlyFinishedFiles
 
