@@ -49,7 +49,7 @@ on run
 	set redColor to current application's NSColor's colorWithCalibratedRed:0.7 green:0.1 blue:0.1 alpha:1.0
 
 	set theApp to current application's NSApplication's sharedApplication()
-	theApp's setActivationPolicy:(current application's NSApplicationActivationPolicyRegular)
+	theApp's setActivationPolicy:0 -- NSApplicationActivationPolicyRegular
 
 	my buildWindow()
 	my showStep(1)
@@ -67,8 +67,8 @@ on buildWindow()
 	set W to 580
 	set H to 486
 	set contentRect to current application's NSMakeRect(200, 200, W, H)
-	set styleMask to (current application's NSWindowStyleMaskTitled) + (current application's NSWindowStyleMaskClosable)
-	set win to current application's NSWindow's alloc()'s initWithContentRect:contentRect styleMask:styleMask backing:(current application's NSBackingStoreBuffered) defer:false
+	set styleMask to 3 -- NSWindowStyleMaskTitled (1) + NSWindowStyleMaskClosable (2)
+	set win to current application's NSWindow's alloc()'s initWithContentRect:contentRect styleMask:styleMask backing:2 defer:false -- 2 = NSBackingStoreBuffered
 	win's setTitle:("DownloadWindobona " & CURRENT_VERSION)
 	win's setReleasedWhenClosed:false
 	win's setDelegate:me
@@ -77,7 +77,7 @@ on buildWindow()
 
 	-- update banner (hidden until an update is found)
 	set updateBanner to current application's NSButton's alloc()'s initWithFrame:(current application's NSMakeRect(20, 454, 540, 24))
-	updateBanner's setBezelStyle:(current application's NSBezelStyleRounded)
+	updateBanner's setBezelStyle:1 -- NSBezelStyleRounded
 	updateBanner's setTarget:me
 	updateBanner's setAction:"openReleasePage:"
 	updateBanner's setHidden:true
@@ -102,14 +102,14 @@ on buildWindow()
 
 	set urlScroll to current application's NSScrollView's alloc()'s initWithFrame:(current application's NSMakeRect(0, 40, 540, 270))
 	urlScroll's setHasVerticalScroller:true
-	urlScroll's setBorderType:(current application's NSBezelBorder)
+	urlScroll's setBorderType:2 -- NSBezelBorder
 	set urlTextView to current application's NSTextView's alloc()'s initWithFrame:(current application's NSMakeRect(0, 0, 540, 270))
 	urlScroll's setDocumentView:urlTextView
 	page1's addSubview:urlScroll
 
 	set next1 to current application's NSButton's alloc()'s initWithFrame:(current application's NSMakeRect(440, 0, 100, 32))
 	next1's setTitle:"Next"
-	next1's setBezelStyle:(current application's NSBezelStyleRounded)
+	next1's setBezelStyle:1 -- NSBezelStyleRounded
 	next1's setTarget:me
 	next1's setAction:"step1Next:"
 	page1's addSubview:next1
@@ -127,21 +127,21 @@ on buildWindow()
 
 	set chooseBtn to current application's NSButton's alloc()'s initWithFrame:(current application's NSMakeRect(0, 240, 180, 32))
 	chooseBtn's setTitle:"Choose Folder…"
-	chooseBtn's setBezelStyle:(current application's NSBezelStyleRounded)
+	chooseBtn's setBezelStyle:1 -- NSBezelStyleRounded
 	chooseBtn's setTarget:me
 	chooseBtn's setAction:"chooseFolder:"
 	page2's addSubview:chooseBtn
 
 	set back2 to current application's NSButton's alloc()'s initWithFrame:(current application's NSMakeRect(0, 0, 100, 32))
 	back2's setTitle:"Back"
-	back2's setBezelStyle:(current application's NSBezelStyleRounded)
+	back2's setBezelStyle:1 -- NSBezelStyleRounded
 	back2's setTarget:me
 	back2's setAction:"step2Back:"
 	page2's addSubview:back2
 
 	set startButton to current application's NSButton's alloc()'s initWithFrame:(current application's NSMakeRect(440, 0, 100, 32))
 	startButton's setTitle:"Start"
-	startButton's setBezelStyle:(current application's NSBezelStyleRounded)
+	startButton's setBezelStyle:1 -- NSBezelStyleRounded
 	startButton's setTarget:me
 	startButton's setAction:"step2Start:"
 	startButton's setEnabled:false
@@ -165,7 +165,7 @@ on buildWindow()
 
 	set ordersScroll to current application's NSScrollView's alloc()'s initWithFrame:(current application's NSMakeRect(0, 40, 540, 255))
 	ordersScroll's setHasVerticalScroller:true
-	ordersScroll's setBorderType:(current application's NSBezelBorder)
+	ordersScroll's setBorderType:2 -- NSBezelBorder
 	set ordersContainer to current application's NSView's alloc()'s initWithFrame:(current application's NSMakeRect(0, 0, 520, 10))
 	ordersScroll's setDocumentView:ordersContainer
 	page3's addSubview:ordersScroll
@@ -176,7 +176,7 @@ on buildWindow()
 
 	set closeButton to current application's NSButton's alloc()'s initWithFrame:(current application's NSMakeRect(440, 0, 100, 32))
 	closeButton's setTitle:"Close"
-	closeButton's setBezelStyle:(current application's NSBezelStyleRounded)
+	closeButton's setBezelStyle:1 -- NSBezelStyleRounded
 	closeButton's setTarget:me
 	closeButton's setAction:"closeClicked:"
 	closeButton's setHidden:true
@@ -271,7 +271,7 @@ on chooseFolder:sender
 	thePanel's setCanChooseFiles:false
 	thePanel's setAllowsMultipleSelection:false
 	set theResult to thePanel's runModal()
-	if theResult is (current application's NSModalResponseOK) then
+	if theResult is 1 then -- NSModalResponseOK
 		set theURL to (thePanel's URLs())'s firstObject()
 		set destPath to (theURL's |path|()) as text
 		folderPathLabel's setStringValue:destPath
@@ -423,14 +423,10 @@ end openReleasePage:
 on checkForUpdate()
 	try
 		set theURL to current application's NSURL's URLWithString:("https://api.github.com/repos/" & GITHUB_REPO & "/releases/latest")
-		set theRequest to current application's NSMutableURLRequest's requestWithURL:theURL
-		theRequest's setTimeoutInterval:4.0
-		set theResponse to missing value
-		set theErr to missing value
-		set theData to current application's NSURLConnection's sendSynchronousRequest:theRequest returningResponse:(reference to theResponse) |error|:(reference to theErr)
-		if theData is missing value then return
+		set nsJsonStr to current application's NSString's stringWithContentsOfURL:theURL encoding:4 |error|:(missing value) -- 4 = NSUTF8StringEncoding
+		if nsJsonStr is missing value then return
 
-		set jsonStr to (current application's NSString's alloc()'s initWithData:theData encoding:(current application's NSUTF8StringEncoding)) as text
+		set jsonStr to nsJsonStr as text
 		set tagValue to my extractJSONString(jsonStr, "tag_name")
 		if tagValue is "" then return
 
