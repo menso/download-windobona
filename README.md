@@ -76,9 +76,21 @@ osacompile -o ../DownloadWindobona.app DownloadWindobona.applescript
 mkdir -p ../DownloadWindobona.app/Contents/Resources
 cp download_windobona.sh ../DownloadWindobona.app/Contents/Resources/
 chmod +x ../DownloadWindobona.app/Contents/Resources/download_windobona.sh
+cp DownloadWindobona.icns ../DownloadWindobona.app/Contents/Resources/applet.icns
+codesign --force --deep --sign - ../DownloadWindobona.app
 ```
 
-No Xcode project, no signing, no dependencies to install.
+No Xcode project, no paid Developer ID needed. The `codesign` step is still
+required, though: `osacompile` ad-hoc signs the app at build time, and
+copying files into it afterwards (the shell script, the icon) invalidates
+that signature. Locally macOS is lenient about running a mismatched
+signature, but a browser-downloaded (quarantined) copy gets strict
+verification and shows "‘DownloadWindobona.app’ is damaged and can't be
+opened" instead of the normal "unidentified developer" prompt if this step
+is skipped. Re-signing after all files are in place fixes it -- an ad-hoc
+signature doesn't remove the "unidentified developer" prompt itself (that
+needs a paid Developer ID + notarization), it just makes the signature
+match the bundle so Gatekeeper doesn't call it corrupted.
 
 ### Cutting a release
 
