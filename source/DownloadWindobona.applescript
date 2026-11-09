@@ -437,6 +437,22 @@ on showRotationEditor()
 	(theAlert's addButtonWithTitle:"Cancel")
 	theAlert's setAccessoryView:gridView
 
+	-- re-apply each button's state now that the view is attached to a live
+	-- window: setState: calls made while building the buttons off-screen
+	-- (before this point) were confirmed correct in data but not reliably
+	-- reflected visually -- redoing them here, once attached, fixes that
+	repeat with rowIdx3 from 1 to (count of rotButtons)
+		set btns3 to buttons of (item rowIdx3 of rotButtons)
+		set targetDeg to item rowIdx3 of rotRowDeg
+		repeat with c from 1 to 4
+			if targetDeg is (item c of colDegrees) then
+				(item c of btns3)'s setState:1
+			else
+				(item c of btns3)'s setState:0
+			end if
+		end repeat
+	end repeat
+
 	set theResponse to theAlert's runModal() as integer
 	if theResponse is 1000 then
 		set rotationCams to {}
