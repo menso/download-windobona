@@ -53,6 +53,7 @@ property rotationDegrees : {}
 property rotWin : missing value
 property rotButtons : {}
 property rotRowDeg : {}
+property rotEditorOpenCount : 0
 
 property greenColor : missing value
 property grayColor : missing value
@@ -390,7 +391,15 @@ on showRotationEditor()
 
 	set rotButtons to {}
 	set rowIdx to 0
-	repeat with camN in cams
+	repeat with camNRef in cams
+		-- "repeat with x in list" gives a *reference* into the list, not a
+		-- plain value -- coercing it immediately avoids subtle comparison
+		-- mismatches later (this is very likely the actual root cause of
+		-- everything we've been chasing: degreesForCam(camN) using this
+		-- uncoerced reference could quietly fail to match against the
+		-- plain integers in rotationCams, while every debug check so far
+		-- happened to test degreesForCam with a literal number instead)
+		set camN to camNRef as integer
 		set rowIdx to rowIdx + 1
 		set rowTop to gridH - (rowIdx * rowH)
 		set camLabel to my makeLabel("Camera " & camN, 0, rowTop + 6, labelW, 20, false)
@@ -401,7 +410,6 @@ on showRotationEditor()
 		repeat with c from 1 to 4
 			if curDeg is (item c of colDegrees) then set selIdx to c - 1
 		end repeat
-
 		set thePopup to current application's NSPopUpButton's alloc()'s initWithFrame:(current application's NSMakeRect(labelW, rowTop + 2, popupW, 26)) pullsDown:false
 		thePopup's addItemsWithTitles:{"No rotation", "90° clockwise", "90° counter-clockwise", "180°"}
 		thePopup's selectItemAtIndex:selIdx
