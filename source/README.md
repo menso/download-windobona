@@ -46,6 +46,9 @@ Line Tools prompt.
 - Resumable: re-running the same order skips any file already downloaded
   correctly (checked by comparing on-disk size to the server's reported
   size), so a re-run after an interruption only fetches what's missing.
+  A rotated file no longer matches that size check, so its own folder
+  gets a `z_non-video_data` marker instead — out of the way, but still
+  enough for a re-run to recognize it's already done.
 - Checks this repo's latest GitHub release on launch and shows a banner at
   the top of the window if a newer version exists (click it to open the
   release page). This is a simple string comparison against the version
