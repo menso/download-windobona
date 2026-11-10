@@ -34,10 +34,16 @@ property queuedURLs : {}
 property logPath : ""
 property orderBars : {}
 property orderStatusLabels : {}
+property activeLabels : {}
+property activeBars : {}
 property orderTotals : {}
 property orderDone : {}
 property orderSucceeded : {}
 property orderFinished : {}
+property orderActive : {}
+property orderAvgPct : {}
+property rotateRetryKeys : {}
+property rotateRetryCounts : {}
 
 property destPath : ""
 property pollTimer : missing value
@@ -74,6 +80,7 @@ on run
 	my showStep(1)
 	win's makeKeyAndOrderFront:me
 	theApp's activateIgnoringOtherApps:true
+	my setMiniwindowIcon()
 
 	my checkForUpdate()
 
@@ -97,6 +104,20 @@ on setDockIcon()
 		end if
 	end try
 end setDockIcon
+
+on setMiniwindowIcon()
+	-- set only after the window is actually on screen -- setting this
+	-- on a brand-new, not-yet-shown window didn't stick for the Dock's
+	-- minimized-window tile, even though the exact same image works
+	-- fine for setApplicationIconImage: above
+	try
+		set iconPath2 to current application's NSBundle's mainBundle()'s pathForResource:"applet" ofType:"icns"
+		if iconPath2 is not missing value then
+			set miniImage to current application's NSImage's alloc()'s initWithContentsOfFile:iconPath2
+			if miniImage is not missing value then win's setMiniwindowImage:miniImage
+		end if
+	end try
+end setMiniwindowIcon
 
 on buildMenuBar()
 	-- a minimal app menu is all that's needed for macOS to wire up Cmd-Q
@@ -132,28 +153,23 @@ end buildMenuBar
 
 on buildWindow()
 	set W to 580
-	set H to 486
+	set H to 626
 	set contentRect to current application's NSMakeRect(200, 200, W, H)
 	set styleMask to 7 -- NSWindowStyleMaskTitled (1) + Closable (2) + Miniaturizable (4)
 	set win to current application's NSWindow's alloc()'s initWithContentRect:contentRect styleMask:styleMask backing:2 defer:false -- 2 = NSBackingStoreBuffered
+	-- center on whichever screen is actually current, instead of a fixed
+	-- screen-coordinate origin -- a hardcoded origin can land off-screen
+	-- entirely on a multi-monitor setup if the display arrangement differs
+	-- from whenever that coordinate was chosen
+	win's |center|()
 	win's setTitle:("DownloadWindobona " & CURRENT_VERSION)
 	win's setReleasedWhenClosed:false
 	win's setDelegate:me
-	try
-		set iconPath2 to current application's NSBundle's mainBundle()'s pathForResource:"applet" ofType:"icns"
-		if iconPath2 is not missing value then
-			set miniImage to current application's NSImage's alloc()'s initWithContentsOfFile:iconPath2
-			-- NSWindow.miniwindowImage is what the Dock actually uses for a
-			-- minimized window's tile; the app-wide icon (set elsewhere)
-			-- does not automatically cover this specific case
-			if miniImage is not missing value then win's setMiniwindowImage:miniImage
-		end if
-	end try
 
 	set contentView to win's contentView()
 
 	-- update banner (hidden until an update is found)
-	set updateBanner to current application's NSButton's alloc()'s initWithFrame:(current application's NSMakeRect(20, 454, 540, 24))
+	set updateBanner to current application's NSButton's alloc()'s initWithFrame:(current application's NSMakeRect(20, 594, 540, 24))
 	updateBanner's setBezelStyle:1 -- NSBezelStyleRounded
 	updateBanner's setTarget:me
 	updateBanner's setAction:"openReleasePage:"
@@ -161,11 +177,11 @@ on buildWindow()
 	contentView's addSubview:updateBanner
 
 	-- stepper bar
-	set stepLabel1 to my makeLabel("1  Add URLs", 20, 420, 170, 24, false)
-	set arrow1 to my makeLabel("→", 192, 420, 24, 24, false)
-	set stepLabel2 to my makeLabel("2  Select Folder", 218, 420, 170, 24, false)
-	set arrow2 to my makeLabel("→", 390, 420, 24, 24, false)
-	set stepLabel3 to my makeLabel("3  Download Progress", 416, 420, 170, 24, false)
+	set stepLabel1 to my makeLabel("1  Add URLs", 20, 560, 170, 24, false)
+	set arrow1 to my makeLabel("→", 192, 560, 24, 24, false)
+	set stepLabel2 to my makeLabel("2  Select Folder", 218, 560, 170, 24, false)
+	set arrow2 to my makeLabel("→", 390, 560, 24, 24, false)
+	set stepLabel3 to my makeLabel("3  Download Progress", 416, 560, 170, 24, false)
 	contentView's addSubview:stepLabel1
 	contentView's addSubview:arrow1
 	contentView's addSubview:stepLabel2
@@ -173,7 +189,7 @@ on buildWindow()
 	contentView's addSubview:stepLabel3
 
 	-- page 1: add URLs
-	set page1 to current application's NSView's alloc()'s initWithFrame:(current application's NSMakeRect(20, 60, 540, 350))
+	set page1 to current application's NSView's alloc()'s initWithFrame:(current application's NSMakeRect(20, 200, 540, 350))
 	set instr1 to my makeLabel("Paste one or more Windobona order URLs, one per line:", 0, 320, 540, 20, false)
 	page1's addSubview:instr1
 
@@ -199,7 +215,7 @@ on buildWindow()
 	contentView's addSubview:page1
 
 	-- page 2: destination folder
-	set page2 to current application's NSView's alloc()'s initWithFrame:(current application's NSMakeRect(20, 60, 540, 350))
+	set page2 to current application's NSView's alloc()'s initWithFrame:(current application's NSMakeRect(20, 200, 540, 350))
 	set instr2 to my makeLabel("Choose a destination folder for the downloaded videos:", 0, 320, 500, 24, false)
 	page2's addSubview:instr2
 
@@ -233,17 +249,43 @@ on buildWindow()
 	page2's setHidden:true
 
 	-- page 3: download progress
-	set page3 to current application's NSView's alloc()'s initWithFrame:(current application's NSMakeRect(20, 60, 540, 350))
+	set page3 to current application's NSView's alloc()'s initWithFrame:(current application's NSMakeRect(20, 60, 540, 490))
 
-	set overallLabel to my makeLabel("Overall Progress: 0%  (0 of 0)", 0, 330, 540, 20, false)
+	set overallLabel to my makeLabel("Overall Progress: 0%  (0 of 0)", 0, 470, 540, 20, false)
 	page3's addSubview:overallLabel
 
-	set overallBar to current application's NSProgressIndicator's alloc()'s initWithFrame:(current application's NSMakeRect(0, 305, 540, 18))
+	set overallBar to current application's NSProgressIndicator's alloc()'s initWithFrame:(current application's NSMakeRect(0, 445, 540, 18))
 	overallBar's setIndeterminate:false
 	overallBar's setMinValue:0
 	overallBar's setMaxValue:100
 	overallBar's setDoubleValue:0
 	page3's addSubview:overallBar
+
+	-- up to 6 live mini progress bars, one per currently-downloading file
+	-- (CONCURRENCY in the shell script), fed from the same pct/pctname
+	-- files it already writes for its own STATE reporting
+	set activeTitle to my makeLabel("Active Downloads:", 0, 413, 200, 18, true)
+	page3's addSubview:activeTitle
+	set activeLabels to {}
+	set activeBars to {}
+	repeat with slotN from 1 to 6
+		set rowY to 413 - (slotN * 18)
+		set slotLabel to my makeLabel("", 0, rowY + 2, 190, 16, false)
+		slotLabel's setFont:(current application's NSFont's systemFontOfSize:11)
+		slotLabel's setHidden:true
+		page3's addSubview:slotLabel
+		set end of activeLabels to slotLabel
+
+		set slotBar to current application's NSProgressIndicator's alloc()'s initWithFrame:(current application's NSMakeRect(200, rowY + 3, 340, 12))
+		slotBar's setIndeterminate:false
+		slotBar's setMinValue:0
+		slotBar's setMaxValue:100
+		slotBar's setDoubleValue:0
+		slotBar's setControlSize:2 -- NSControlSizeSmall
+		slotBar's setHidden:true
+		page3's addSubview:slotBar
+		set end of activeBars to slotBar
+	end repeat
 
 	set ordersScroll to current application's NSScrollView's alloc()'s initWithFrame:(current application's NSMakeRect(0, 40, 540, 255))
 	ordersScroll's setHasVerticalScroller:true
@@ -486,6 +528,8 @@ on step2Start:sender
 		set orderTotals to {}
 		set orderDone to {}
 		set orderSucceeded to {}
+		set orderActive to {}
+		set orderAvgPct to {}
 		set shellWorkDir to ""
 		set rotatedKeys to {}
 		set totalRotatedCount to 0
@@ -505,6 +549,8 @@ on step2Start:sender
 			set end of orderTotals to 0
 			set end of orderDone to 0
 			set end of orderSucceeded to 0
+			set end of orderActive to 0
+			set end of orderAvgPct to 0
 			set end of orderFinished to false
 
 			set rowTop to containerH - (i * rowH)
@@ -556,6 +602,7 @@ on pollProgress:sender
 		if wdLine is not "" then set shellWorkDir to (text 9 thru -1 of wdLine)
 	end if
 	if shellWorkDir is not "" then my rotateNewlyFinishedFiles()
+	my updateActiveDownloadBars()
 
 	repeat with i from 1 to n
 		if (item i of orderFinished) is false then
@@ -575,6 +622,8 @@ on pollProgress:sender
 					set item i of orderDone to dN
 					set item i of orderSucceeded to dN
 					set item i of orderTotals to tN
+					set item i of orderActive to 0
+					set item i of orderAvgPct to 0
 					theBar's setDoubleValue:100
 					theStatus's setStringValue:("Done " & dN & "/" & tN)
 					theStatus's setTextColor:greenColor
@@ -588,11 +637,19 @@ on pollProgress:sender
 					set dN to my valueFor(stateLine, "done")
 					set sN to my valueFor(stateLine, "succeeded")
 					set aN to my valueFor(stateLine, "active")
+					set avgN to my valueFor(stateLine, "avgpct")
 					set item i of orderTotals to tN
 					set item i of orderDone to dN
 					set item i of orderSucceeded to sN
+					set item i of orderActive to aN
+					set item i of orderAvgPct to avgN
 					if tN > 0 then
-						set pct to (dN / tN) * 100
+						-- partial credit for files that are mid-download, not
+						-- just ones that have already finished -- otherwise
+						-- the bar sits still, then jumps in a batch of 6
+						-- every time a wave of downloads completes
+						set effDone to dN + (aN * avgN / 100)
+						set pct to (effDone / tN) * 100
 						theBar's setDoubleValue:pct
 					end if
 					if aN > 0 then
@@ -610,13 +667,15 @@ on pollProgress:sender
 	set succeededAll to 0
 	repeat with i from 1 to n
 		set totalAll to totalAll + (item i of orderTotals)
-		set doneAll to doneAll + (item i of orderDone)
+		set doneAll to doneAll + (item i of orderDone) + ((item i of orderActive) * (item i of orderAvgPct) / 100)
 		set succeededAll to succeededAll + (item i of orderSucceeded)
 	end repeat
 
 	if totalAll > 0 then
-		-- the bar fills based on total processed (so it reliably reaches
-		-- 100%), but the number shown is successful downloads only
+		-- the bar fills based on total processed, plus partial credit for
+		-- files currently mid-download (so it reliably reaches 100% but
+		-- also tracks real progress smoothly instead of jumping in batches
+		-- of 6); the number shown alongside it is successful downloads only
 		set overallPct to (doneAll / totalAll) * 100
 		overallBar's setDoubleValue:overallPct
 		set pctInt to round overallPct
@@ -628,6 +687,7 @@ on pollProgress:sender
 		-- catch any file that finished in the same tick allDone went true
 		-- (and so wasn't picked up by a later poll cycle)
 		if shellWorkDir is not "" then my rotateNewlyFinishedFiles()
+		my hideActiveDownloadBars()
 		set rotSuffix to ""
 		if totalRotatedCount > 0 then set rotSuffix to return & "Rotated " & totalRotatedCount & " video(s) per your settings."
 		summaryLabel's setStringValue:("Downloaded " & succeededAll & " of " & totalAll & " videos." & rotSuffix & return & "Saved to: " & destPath)
@@ -650,7 +710,6 @@ on rotateNewlyFinishedFiles()
 		repeat with keyObj in keysList
 			set keyStr to keyObj as text
 			if keyStr is not in rotatedKeys then
-				set end of rotatedKeys to keyStr
 				set outcome to my trimText(my readFile(statusDir & "/" & keyStr))
 				if outcome is "success" then
 					set fPath to my trimText(my readFile(shellWorkDir & "/pctname/" & keyStr))
@@ -662,13 +721,39 @@ on rotateNewlyFinishedFiles()
 								set rotOK to my rotateFile(fPath, deg)
 								if rotOK then
 									set totalRotatedCount to totalRotatedCount + 1
-								else if not rotationDebugShown then
-									set rotationDebugShown to true
-									my showAlert("Rotation debug", "rotateFile returned false for: " & fPath & return & "camera=" & camN & " degrees=" & deg)
+									set end of rotatedKeys to keyStr
+								else
+									-- a just-finished file occasionally isn't
+									-- readable by AVFoundation yet (seen on
+									-- a busy external drive); retry on later
+									-- poll ticks instead of giving up at once
+									set retryIdx to my indexOfText(keyStr, rotateRetryKeys)
+									if retryIdx is 0 then
+										set end of rotateRetryKeys to keyStr
+										set end of rotateRetryCounts to 1
+										set retryIdx to count of rotateRetryKeys
+									else
+										set item retryIdx of rotateRetryCounts to (item retryIdx of rotateRetryCounts) + 1
+									end if
+									if (item retryIdx of rotateRetryCounts) ≥ 6 then
+										set end of rotatedKeys to keyStr
+										if not rotationDebugShown then
+											set rotationDebugShown to true
+											my showAlert("Rotation debug", "rotateFile kept failing for: " & fPath & return & "camera=" & camN & " degrees=" & deg)
+										end if
+									end if
 								end if
+							else
+								set end of rotatedKeys to keyStr
 							end if
+						else
+							set end of rotatedKeys to keyStr
 						end if
+					else
+						set end of rotatedKeys to keyStr
 					end if
+				else
+					set end of rotatedKeys to keyStr
 				end if
 			end if
 		end repeat
@@ -679,6 +764,125 @@ on rotateNewlyFinishedFiles()
 		end if
 	end try
 end rotateNewlyFinishedFiles
+
+on updateActiveDownloadBars()
+	if shellWorkDir is "" then
+		my hideActiveDownloadBars()
+		return
+	end if
+	try
+		set pctDir to shellWorkDir & "/pct"
+		set fm to current application's NSFileManager's defaultManager()
+		set keysList to fm's contentsOfDirectoryAtPath:pctDir |error|:(missing value)
+		if keysList is missing value then
+			my hideActiveDownloadBars()
+			return
+		end if
+
+		set keyTexts to {}
+		repeat with keyObjRef in keysList
+			set end of keyTexts to (keyObjRef as text)
+		end repeat
+		-- sort so a given file tends to keep the same slot between polls
+		-- instead of the rows reshuffling every tick
+		set keyTexts to my sortTextList(keyTexts)
+
+		set slotIdx to 0
+		repeat with keyStr in keyTexts
+			if slotIdx is 6 then exit repeat
+			set slotIdx to slotIdx + 1
+			set pctVal to 0
+			try
+				set pctVal to (my trimText(my readFile(pctDir & "/" & keyStr))) as integer
+			end try
+			set fNameFull to my trimText(my readFile(shellWorkDir & "/pctname/" & keyStr))
+			set theLbl to item slotIdx of activeLabels
+			set theBar to item slotIdx of activeBars
+			theLbl's setStringValue:(my shortDisplayName(fNameFull))
+			theLbl's setHidden:false
+			theBar's setDoubleValue:pctVal
+			theBar's setHidden:false
+		end repeat
+		repeat with j from (slotIdx + 1) to 6
+			(item j of activeLabels)'s setHidden:true
+			(item j of activeBars)'s setHidden:true
+		end repeat
+	on error
+		my hideActiveDownloadBars()
+	end try
+end updateActiveDownloadBars
+
+on hideActiveDownloadBars()
+	repeat with j from 1 to 6
+		(item j of activeLabels)'s setHidden:true
+		(item j of activeBars)'s setHidden:true
+	end repeat
+end hideActiveDownloadBars
+
+on shortDisplayName(p)
+	set camN to my cameraNumberFromPath(p)
+	set tCode to my timeCodeFromPath(p)
+	if camN is not -1 then
+		if tCode is not "" then
+			return "[" & tCode & "] Camera " & camN
+		else
+			return "Camera " & camN
+		end if
+	end if
+	set p to p as text
+	set AppleScript's text item delimiters to "/"
+	set parts to text items of p
+	set AppleScript's text item delimiters to ""
+	return item -1 of parts
+end shortDisplayName
+
+on timeCodeFromPath(p)
+	-- filenames look like <date>_<HH>_<MM>_<SS>_<FF>_camN.mp4 -- pull the
+	-- flight's own HHMMSS out of that so two camN rows from different
+	-- flights downloading at once can be told apart
+	set p to p as text
+	set AppleScript's text item delimiters to "/"
+	set parts to text items of p
+	set AppleScript's text item delimiters to ""
+	set baseName to item -1 of parts
+	set AppleScript's text item delimiters to "_"
+	set segs to text items of baseName
+	set AppleScript's text item delimiters to ""
+	if (count of segs) is less than 4 then return ""
+	set hh to item 2 of segs
+	set mm to item 3 of segs
+	set ss to item 4 of segs
+	try
+		hh as integer
+		mm as integer
+		ss as integer
+	on error
+		return ""
+	end try
+	if (length of hh) is not 2 or (length of mm) is not 2 or (length of ss) is not 2 then return ""
+	return hh & mm & ss
+end timeCodeFromPath
+
+on indexOfText(needle, lst)
+	repeat with i from 1 to (count of lst)
+		if (item i of lst) is needle then return i
+	end repeat
+	return 0
+end indexOfText
+
+on sortTextList(lst)
+	set n to count of lst
+	repeat with i from 1 to n - 1
+		repeat with j from 1 to n - i
+			if (item j of lst) > (item (j + 1) of lst) then
+				set tmp to item j of lst
+				set item j of lst to item (j + 1) of lst
+				set item (j + 1) of lst to tmp
+			end if
+		end repeat
+	end repeat
+	return lst
+end sortTextList
 
 on cameraNumberFromPath(p)
 	set p to p as text
@@ -708,6 +912,7 @@ end closeClicked:
 
 on stopClicked:sender
 	if pollTimer is not missing value then pollTimer's invalidate()
+	my hideActiveDownloadBars()
 	if bashPID is not "" then
 		try
 			do shell script "kill " & bashPID & " 2>/dev/null; sleep 0.3; kill -9 " & bashPID & " 2>/dev/null; pkill -9 -f " & quoted form of my scriptPath() & " 2>/dev/null"
@@ -769,12 +974,52 @@ on checkForUpdate()
 		set cleanTag to tagValue
 		if cleanTag starts with "v" then set cleanTag to text 2 thru -1 of cleanTag
 
-		if cleanTag is not CURRENT_VERSION then
+		if my isVersionNewer(cleanTag, CURRENT_VERSION) then
 			updateBanner's setTitle:("⬆ Update available: " & tagValue & " — click to view on GitHub")
 			updateBanner's setHidden:false
 		end if
 	end try
 end checkForUpdate
+
+on isVersionNewer(verA, verB)
+	-- true only if verA is a genuinely higher version than verB (proper
+	-- numeric per-segment comparison), not merely "different" -- otherwise
+	-- running a newer build than the last published release would wrongly
+	-- show "update available" pointing backwards
+	set partsA to my splitVersionParts(verA)
+	set partsB to my splitVersionParts(verB)
+	set maxLen to count of partsA
+	if (count of partsB) > maxLen then set maxLen to count of partsB
+	repeat with i from 1 to maxLen
+		set aVal to 0
+		set bVal to 0
+		if i ≤ (count of partsA) then set aVal to item i of partsA
+		if i ≤ (count of partsB) then set bVal to item i of partsB
+		if aVal > bVal then return true
+		if aVal < bVal then return false
+	end repeat
+	return false
+end isVersionNewer
+
+on splitVersionParts(v)
+	set AppleScript's text item delimiters to "."
+	set rawParts to text items of (v as text)
+	set AppleScript's text item delimiters to ""
+	set resultList to {}
+	repeat with p in rawParts
+		set numText to ""
+		repeat with ch in (p as text)
+			if ch is in "0123456789" then
+				set numText to numText & ch
+			else
+				exit repeat
+			end if
+		end repeat
+		if numText is "" then set numText to "0"
+		set end of resultList to (numText as integer)
+	end repeat
+	return resultList
+end splitVersionParts
 
 on extractJSONString(jsonStr, key)
 	set searchPattern to "\"" & key & "\":\""
@@ -996,9 +1241,20 @@ on rotateFile(filePath, degrees)
 		end repeat
 
 		if theStatus is 3 then
-			current application's NSFileManager's defaultManager()'s removeItemAtPath:filePath |error|:(missing value)
-			current application's NSFileManager's defaultManager()'s moveItemAtPath:tmpPath toPath:filePath |error|:(missing value)
-			return true
+			-- atomic swap: the original is never removed unless the
+			-- rotated file is already safely in its place, so a hiccup
+			-- here (e.g. an external drive briefly remounting) can't
+			-- leave the file deleted with nothing in its spot
+			set origURL to current application's NSURL's fileURLWithPath:filePath
+			set tmpURL to current application's NSURL's fileURLWithPath:tmpPath
+			set repOK to current application's NSFileManager's defaultManager()'s replaceItemAtURL:origURL withItemAtURL:tmpURL backupItemName:(missing value) options:0 resultingItemURL:(missing value) |error|:(missing value)
+			if repOK is not false then
+				return true
+			end if
+			try
+				current application's NSFileManager's defaultManager()'s removeItemAtPath:tmpPath |error|:(missing value)
+			end try
+			return false
 		else
 			try
 				current application's NSFileManager's defaultManager()'s removeItemAtPath:tmpPath |error|:(missing value)
@@ -1019,10 +1275,11 @@ end joinList
 
 on trimText(t)
 	set t to t as text
-	repeat while t starts with " "
+	set whitespaceChars to {" ", tab, return, linefeed}
+	repeat while (length of t) is greater than 0 and (text 1 thru 1 of t) is in whitespaceChars
 		set t to text 2 thru -1 of t
 	end repeat
-	repeat while t ends with " "
+	repeat while (length of t) is greater than 0 and (text -1 thru -1 of t) is in whitespaceChars
 		set t to text 1 thru -2 of t
 	end repeat
 	return t
