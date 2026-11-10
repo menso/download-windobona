@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 APP="DownloadWindobona.app"
-VOLNAME="DownloadWindobona"
+VOLNAME="${VOLNAME:-DownloadWindobona Installer}"
 DMG_FINAL="DownloadWindobona.dmg"
 BACKGROUND="dmg_background.png"
 
@@ -39,9 +39,11 @@ osascript <<OSASCRIPT_EOF
 tell application "Finder"
 	tell disk "$VOLNAME"
 		open
+		delay 1
 		set current view of container window to icon view
 		set toolbar visible of container window to false
 		set statusbar visible of container window to false
+		set sidebar width of container window to 0
 		set the bounds of container window to {400, 100, 1000, 500}
 		set theViewOptions to the icon view options of container window
 		set arrangement of theViewOptions to not arranged
@@ -51,10 +53,20 @@ tell application "Finder"
 		set position of item "Applications" of container window to {450, 180}
 		update without registering applications
 		delay 1
+		-- re-apply: some of the above don't reliably stick the first time
+		set toolbar visible of container window to false
+		set statusbar visible of container window to false
+		set the bounds of container window to {400, 100, 1000, 500}
+		update without registering applications
+		delay 1
 		close
 	end tell
 end tell
 OSASCRIPT_EOF
+
+chflags hidden "$MOUNT_DIR/.background" 2>/dev/null || true
+chflags hidden "$MOUNT_DIR/.fseventsd" 2>/dev/null || true
+chflags hidden "$MOUNT_DIR/.DS_Store" 2>/dev/null || true
 
 sync
 hdiutil detach "$MOUNT_DIR" -quiet

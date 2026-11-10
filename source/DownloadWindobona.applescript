@@ -722,6 +722,20 @@ on rotateNewlyFinishedFiles()
 								if rotOK then
 									set totalRotatedCount to totalRotatedCount + 1
 									set end of rotatedKeys to keyStr
+									-- rotating rewrites the file into a new
+									-- container, changing its size, so a
+									-- later run's plain size check would
+									-- otherwise treat it as incomplete and
+									-- re-download it every time -- the marker
+									-- lives in a shared side folder, not next
+									-- to the video, so it doesn't clutter
+									-- the user's per-flight folders
+									try
+										set markerPath to my markerPathFor(fPath)
+										set markerDir to my parentFolderOf(markerPath)
+										current application's NSFileManager's defaultManager()'s createDirectoryAtPath:markerDir withIntermediateDirectories:true |attributes|:(missing value) |error|:(missing value)
+										current application's NSFileManager's defaultManager()'s createFileAtPath:markerPath |contents|:(missing value) |attributes|:(missing value)
+									end try
 								else
 									-- a just-finished file occasionally isn't
 									-- readable by AVFoundation yet (seen on
@@ -883,6 +897,31 @@ on sortTextList(lst)
 	end repeat
 	return lst
 end sortTextList
+
+on parentFolderOf(p)
+	set p to p as text
+	set AppleScript's text item delimiters to "/"
+	set parts to text items of p
+	set parentParts to items 1 thru -2 of parts
+	set joined to parentParts as text
+	set AppleScript's text item delimiters to ""
+	return joined
+end parentFolderOf
+
+on markerPathFor(fPath)
+	-- a rotation marker for .../<date>/<HHMMSS>_<Team>/<file>.mp4 lives at
+	-- .../<date>/z_non-video_data/<file>.mp4.rotated -- grouped together
+	-- per date and out of the way, instead of sitting next to the videos
+	-- in each flight's own folder
+	set fPath to fPath as text
+	set AppleScript's text item delimiters to "/"
+	set parts to text items of fPath
+	set baseName to item -1 of parts
+	set dateParts to items 1 thru -3 of parts
+	set dateFolder to dateParts as text
+	set AppleScript's text item delimiters to ""
+	return dateFolder & "/z_non-video_data/" & baseName & ".rotated"
+end markerPathFor
 
 on cameraNumberFromPath(p)
 	set p to p as text

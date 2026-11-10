@@ -185,6 +185,17 @@ process_item() {
     expected=$(printf '%s\n' "$head_info" | tr -d '\r' | grep -i '^content-length:' | tail -1 | awk '{print $2}')
     [ -z "$expected" ] && expected=0
 
+    # rotating rewrites a file into a new container, so its size no longer
+    # matches the server's un-rotated Content-Length and the plain size
+    # check below would otherwise re-download it every time; the marker
+    # lives in a shared per-date folder, not next to the video itself, so
+    # it doesn't clutter the user's per-flight folders
+    rotated_marker="$DEST/$(dirname "$folder")/z_non-video_data/$outname.rotated"
+    if [ -f "$rotated_marker" ]; then
+        echo "success" > "$WORKDIR/status/$key"
+        rm -f "$WORKDIR/pct/$key"
+        return
+    fi
     if [ "$expected" != "0" ] && [ -f "$outpath" ]; then
         actual=$(stat -f%z "$outpath" 2>/dev/null || echo 0)
         if [ "$actual" = "$expected" ]; then
