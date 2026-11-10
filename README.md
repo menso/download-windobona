@@ -6,14 +6,19 @@ footage) into neatly named per-flight folders.
 
 ## Download / run
 
-**[⬇ Download DownloadWindobona.zip](https://github.com/menso/download-windobona/releases/latest/download/DownloadWindobona.zip)**
-(always links to the newest release). Unzip it and double-click
-`DownloadWindobona.app`.
+**[⬇ Download DownloadWindobona.dmg](https://github.com/menso/download-windobona/releases/latest/download/DownloadWindobona.dmg)**
+(always links to the newest release). Open it and drag
+`DownloadWindobona.app` into the `Applications` shortcut shown in the
+window, then launch it from there like any other app.
 
-Don't grab it by browsing the file list above — `.app` is actually a
+A plain zip is also available if you'd rather not install it into
+`Applications` — **[⬇ Download DownloadWindobona.zip](https://github.com/menso/download-windobona/releases/latest/download/DownloadWindobona.zip)**,
+unzip it and double-click `DownloadWindobona.app` wherever you put it.
+
+Don't grab either by browsing the file list above — `.app` is actually a
 folder on disk, so clicking it in GitHub's file browser just opens that
-folder instead of downloading anything. The link above is a proper
-one-click download.
+folder instead of downloading anything. The links above are proper
+one-click downloads.
 
 The app walks you through three steps: paste one or more order URLs
 (e.g. `https://bestellung.windobona.berlin/media/<code>`), choose a
@@ -54,8 +59,9 @@ prompt.
 
 ## Repo layout
 
-This repo tracks source only — the built `.app` is distributed as a zip on
-the [Releases page](https://github.com/menso/download-windobona/releases),
+This repo tracks source only — the built `.app` is distributed as a DMG
+and a zip on the
+[Releases page](https://github.com/menso/download-windobona/releases),
 not committed here (committing a `.app` bundle to the repo tree is exactly
 what made it look like a folder to browse instead of a file to download).
 
@@ -67,6 +73,10 @@ what made it look like a folder to browse instead of a file to download).
     `<media_url> <destination_folder>` as arguments and prints
     `STATE ...` / `FINAL ...` / `ERROR ...` lines that the AppleScript side
     polls from a log file.
+- `build_dmg.sh` — builds the drag-to-Applications installer DMG from an
+  already-built `DownloadWindobona.app` at the repo root; see "Cutting a
+  release" below.
+- `dmg_background.png` — the installer window's background image.
 
 ## Rebuilding after an edit
 
@@ -97,14 +107,23 @@ match the bundle so Gatekeeper doesn't call it corrupted.
 ```bash
 # bump CURRENT_VERSION in source/DownloadWindobona.applescript first, then:
 cd ..  # repo root, with DownloadWindobona.app freshly built there (gitignored)
+./build_dmg.sh                       # produces DownloadWindobona.dmg
 zip -r DownloadWindobona.zip DownloadWindobona.app
 git tag vX.Y.Z && git push origin vX.Y.Z
-gh release create vX.Y.Z DownloadWindobona.zip --title vX.Y.Z --notes "..."
+gh release create vX.Y.Z DownloadWindobona.dmg DownloadWindobona.zip \
+  --title vX.Y.Z --notes "..."
 ```
 
-The asset must always be named `DownloadWindobona.zip` — that's what makes
-the `.../releases/latest/download/DownloadWindobona.zip` link above always
-resolve to the newest release automatically.
+Both asset filenames must stay exactly `DownloadWindobona.dmg` and
+`DownloadWindobona.zip` on every release — that's what makes the two
+`.../releases/latest/download/...` links above always resolve to the
+newest release automatically.
+
+`build_dmg.sh` uses only `hdiutil` and Finder's own AppleScript dictionary
+(no third-party tools like `create-dmg`) to lay out a window with the app
+on the left, an `Applications` shortcut on the right, and
+`dmg_background.png` behind them. The first run may prompt for permission
+to let your terminal control Finder — that's normal, just allow it.
 
 ## Contributing
 
